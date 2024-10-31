@@ -10,8 +10,7 @@ download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_versi
 mkdir -p ~/ws
 
 # 下载 Xray-core 并解压到 ~/ws
-curl -L -o Xray-freebsd-64.zip "$download_url"
-unzip -o Xray-freebsd-64.zip -d ~/ws
+curl -L -o Xray-freebsd-64.zip "$download_url" && unzip -o Xray-freebsd-64.zip -d ~/ws
 
 # 删除除 `xray`和'config.*' 文件以外的所有文件
 find ~/ws -type f ! -name "xray" ! -name "config.*" -delete
