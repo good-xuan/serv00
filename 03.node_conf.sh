@@ -3,10 +3,14 @@
 # 提示用户输入信息
 read -p "请输入 Serv00 登录用户名: " user
 read -p "请输入 pName (默认'ws'): " pName
-read -p "请输入域名: " domain
+read -p "请输入域名(默认'user.serv00.net'): " domain
 
 if [ -z "$pName" ]; then
     pName="ws"
+fi
+
+if [ -z "$domain" ]; then
+    domaine="$user.serv00.net"
 fi
 
 
