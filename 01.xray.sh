@@ -8,7 +8,7 @@ if [ -z "$latest_version" ]; then
     latest_version="v24.9.30"
 fi
 
-# 设置下载链接
+# 下载
 wget  https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-freebsd-64.zip
 
 # 创建目标目录
