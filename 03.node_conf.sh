@@ -17,13 +17,13 @@ fi
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
 
-cat https://raw.incept.pw/good-xuan/serv00/main/node_t >>/home/${user}/domains/${domain}/public_nodejs/app.js
+cat https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/node_t >>/home/${user}/domains/${domain}/public_nodejs/app.js
 
 cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/.env
 
-user = "${user}"; 
-pName = "${pName}"; 
-domain = "${domain}";
+const user = "${user}"; 
+const pName = "${pName}"; 
+const domain = "${domain}";
 
 EOF
 
