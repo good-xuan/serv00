@@ -16,47 +16,14 @@ fi
 
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
-cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/app.js
 
-const express = require("express");
-const path = require("path");
-const exec = require("child_process").exec;
-const app = express();
-const port = 3000;
+cat https://raw.incept.pw/good-xuan/serv00/main/node_t >>/home/${user}/domains/${domain}/public_nodejs/app.js
 
-const user = "${user}"; 
-const pName = "${pName}"; 
-const domain = "${domain}";
+cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/.env
 
-app.use(express.static(path.join(__dirname, 'static')));
-
-function keepWebAlive() {
-  const currentDate = new Date();
-  const formattedDate = currentDate.toLocaleDateString();
-  const formattedTime = currentDate.toLocaleTimeString();
-
-  exec(`pgrep -laf ${pName}`, (err, stdout) => {
-    const Process = `/home/${user}/${pName}/${pName} -c /home/${user}/${pName}/config.json`;
-
-    if (stdout.includes(Process)) {
-      console.log(`${formattedDate}, ${formattedTime}: Web Running`);
-    } else {
-      exec(`nohup ${Process} >/dev/null 2>&1 &`, (err) => {
-        if (err) {
-          console.log(`${formattedDate}, ${formattedTime}: Keep alive error: ${err}`);
-        } else {
-          console.log(`${formattedDate}, ${formattedTime}: Keep alive success!`);
-        }
-      });
-    }
-  });
-}
-
-setInterval(keepWebAlive, 10 * 1000);
-
-app.listen(port, () => {
-  console.log(`Server is listening on port ${port}!`);
-});
+user = "${user}"; 
+pName = "${pName}"; 
+domain = "${domain}";
 
 EOF
 
