@@ -10,3 +10,6 @@ wget  https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/03.node
 
 弄乱了使用https://github.com/k0baya/X-for-serv00   重置  
 bash <(curl -Ls https://raw.githubusercontent.com/k0baya/x-for-serv00/main/reset.sh)
+
+安装sing-box使用https://github.com/frankiejun/serv00-play  
+bash <(curl -Ls https://raw.githubusercontent.com/frankiejun/serv00-play/main/start.sh)
