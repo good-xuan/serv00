@@ -1,4 +1,4 @@
-include /home/${user}/domains/${domain}/public_nodejs/.env
+include .env
 
 const express = require("express");
 const path = require("path");
