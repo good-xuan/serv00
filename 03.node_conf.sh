@@ -19,12 +19,12 @@ mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${
 
 wget -O /home/${user}/domains/${domain}/public_nodejs/app.js https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/node_t
 
-cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/.env
+cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/config.js
 
 const user = "${user}"; 
 const pName = "${pName}"; 
 const domain = "${domain}";
-
+module.exports = { user, pName, domain };
 EOF
 
 echo "配置已输出到 /home/${user}/domains/${domain}/public_nodejs/app.js"
