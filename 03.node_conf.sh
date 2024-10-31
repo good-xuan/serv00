@@ -10,8 +10,6 @@ if [ -z "$pName" ]; then
 fi
 
 
-domain = "${domain}"; 
-
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
 cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/app.js
