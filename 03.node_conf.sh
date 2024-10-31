@@ -16,6 +16,8 @@ fi
 
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
+rm /home/${user}/domains/${domain}/public_nodejs/app.js
+rm /home/${user}/domains/${domain}/public_nodejs/config.js
 
 wget -O /home/${user}/domains/${domain}/public_nodejs/app.js https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/node_t
 
