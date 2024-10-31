@@ -1,4 +1,4 @@
-include .env
+include /home/${user}/domains/${domain}/public_nodejs/.env
 
 const express = require("express");
 const path = require("path");
@@ -6,9 +6,6 @@ const exec = require("child_process").exec;
 const app = express();
 const port = 3000;
 
-const user = "${user}"; 
-const pName = "${pName}"; 
-const domain = "${domain}";
 
 app.use(express.static(path.join(__dirname, 'static')));
 
