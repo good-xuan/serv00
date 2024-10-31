@@ -16,6 +16,9 @@ fi
 
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
+cd /home/${user}/domains/${domain}/public_nodejs/
+npm22 install express
+
 rm /home/${user}/domains/${domain}/public_nodejs/app.js
 rm /home/${user}/domains/${domain}/public_nodejs/config.js
 
