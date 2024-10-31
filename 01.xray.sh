@@ -4,13 +4,12 @@
 latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "tag_name" | awk -F '"' '{print $4}')
 
 # 设置下载链接
-download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-freebsd-64.zip"
+wget  https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-freebsd-64.zip
 
 # 创建目标目录
 mkdir -p ~/ws
 
-# 下载 Xray-core 并解压到 ~/ws
-curl -L -o Xray-freebsd-64.zip "$download_url" && unzip -o Xray-freebsd-64.zip -d ~/ws
+unzip -o Xray-freebsd-64.zip -d ~/ws
 
 # 删除除 `xray`和'config.*' 文件以外的所有文件
 find ~/ws -type f ! -name "xray" ! -name "config.*" -delete
