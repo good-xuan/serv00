@@ -17,7 +17,7 @@ fi
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
 
-cat https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/node_t >>/home/${user}/domains/${domain}/public_nodejs/app.js
+wget -O /home/${user}/domains/${domain}/public_nodejs/app.js https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/node_t
 
 cat <<EOF > /home/${user}/domains/${domain}/public_nodejs/.env
 
