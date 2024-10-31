@@ -10,7 +10,7 @@ if [ -z "$pName" ]; then
 fi
 
 
-domain = "${domain}"; // 用户输入的域名
+domain = "${domain}"; 
 
 mv /home/${user}/domains/${domain}/public_nodejs/public /home/${user}/domains/${domain}/public_nodejs/static
 
@@ -22,8 +22,8 @@ const exec = require("child_process").exec;
 const app = express();
 const port = 3000;
 
-const user = "${user}"; // 用户输入的用户名
-const pName = "${pName}"; // 用户输入的 pName
+const user = "${user}"; 
+const pName = "${pName}"; 
 const domain = "${domain}";
 
 app.use(express.static(path.join(__dirname, 'static')));
