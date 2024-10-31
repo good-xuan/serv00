@@ -10,7 +10,7 @@ if [ -z "$pName" ]; then
 fi
 
 if [ -z "$domain" ]; then
-    domaine="$user.serv00.net"
+    domain="$user.serv00.net"
 fi
 
 
