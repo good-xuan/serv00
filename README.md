@@ -14,3 +14,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/k0baya/x-for-serv00/main/reset
 
 安装sing-box使用https://github.com/frankiejun/serv00-play  
 bash <(curl -Ls https://raw.githubusercontent.com/frankiejun/serv00-play/main/start.sh)
+
+
+xray配置示例  
+https://github.com/XTLS/Xray-examples  
