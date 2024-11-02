@@ -18,3 +18,5 @@ bash <(curl -Ls https://raw.githubusercontent.com/frankiejun/serv00-play/main/st
 
 xray配置示例  
 https://github.com/XTLS/Xray-examples  
+https://github.com/chika0801/Xray-examples  
+https://github.com/chika0801/sing-box-examples  
