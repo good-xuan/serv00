@@ -50,6 +50,10 @@ cat <<EOF > $config_path
                 "decryption": "none"
             },
             "streamSettings": {
+                "sockopt": {
+                  "tcpMptcp": true,
+                  "tcpNoDelay": true
+                  },
                 "network": "ws",
                 "wsSettings": {
                     "path": "/"
