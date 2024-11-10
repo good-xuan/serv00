@@ -23,6 +23,13 @@ fi
 cat <<EOF > $config_path
 
 {
+  "dns":
+  {
+    "servers": [
+      "https+local://1.1.1.1/dns-query",
+      "localhost"
+    ]
+  },
   "routing":
   {
     "rules": [
