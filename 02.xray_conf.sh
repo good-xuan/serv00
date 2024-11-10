@@ -26,6 +26,7 @@ cat <<EOF > $config_path
   "dns":
   {
     "servers": [
+      "quic+local://1.1.1.1",
       "https+local://1.1.1.1/dns-query",
       "localhost"
     ]
