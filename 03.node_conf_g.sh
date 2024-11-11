@@ -32,5 +32,5 @@ EOF
 echo "配置已输出到 /home/${user}/domains/${domain}/public_nodejs/app.js"
 
 wget -P /home/${user}/domains/${domain}/public_nodejs/static https://github.com/good-xuan/serv00/raw/refs/heads/main/html.zip 
-unzip -o /home/${user}/domains/${domain}/public_nodejs/static/html.zip -P /home/${user}/domains/${domain}/public_nodejs/static/ 
+unzip -o /home/${user}/domains/${domain}/public_nodejs/static/html.zip -d /home/${user}/domains/${domain}/public_nodejs/static/ 
 rm /home/${user}/domains/${domain}/public_nodejs/static/html.zip
