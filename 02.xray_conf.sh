@@ -64,9 +64,6 @@ cat <<EOF > $config_path
         "security": "tls",
         "tlsSettings":
         {
-          "alpn": [
-            "http/1.1"
-          ],
           "minVersion": "1.3",
           "certificates": [
             {
