@@ -15,12 +15,12 @@ wget  https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray
 # 创建目标目录
 
 
-unzip -o Xray-freebsd-64.zip -d /opt/xray
+unzip -o Xray-linux-64.zip -d /opt/xray
 
 
 
 # 清理下载的 zip 文件
-rm Xray-freebsd-64.zip
+rm /tmp/Xray-freebsd-64.zip
 
 systemctl  restart  xray
 echo "Xray-core 已下载并重启xray"
