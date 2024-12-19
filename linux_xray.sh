@@ -20,7 +20,7 @@ unzip -o Xray-linux-64.zip -d /opt/xray
 
 
 # 清理下载的 zip 文件
-rm /tmp/Xray-linux-64.zip
+rm /tmp/Xray-linux-64.zip*
 
 systemctl  restart  xray
 echo "Xray-core 已下载并重启xray"
