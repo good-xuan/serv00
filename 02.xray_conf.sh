@@ -60,7 +60,7 @@ cat <<EOF > $config_path
           "tcpMptcp": true,
           "tcpNoDelay": true
         },
-        "network": "ws"
+        "network": "xhttp"
       },
       "sniffing":
       {
