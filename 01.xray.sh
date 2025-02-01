@@ -5,7 +5,7 @@ latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/la
 
 # 如果没有获取到信息，设置默认值
 if [ -z "$latest_version" ]; then
-    latest_version="v24.12.31"
+    latest_version="v25.1.30"
 fi
 
 # 下载
