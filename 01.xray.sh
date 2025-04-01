@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 获取最新版本号
-#latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "tag_name" | awk -F '"' '{print $4}')
+latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "tag_name" | awk -F '"' '{print $4}')
 
 # 如果没有获取到信息，设置默认值
 if [ -z "$latest_version" ]; then
