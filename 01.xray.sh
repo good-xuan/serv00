@@ -5,7 +5,7 @@
 
 # 如果没有获取到信息，设置默认值
 if [ -z "$latest_version" ]; then
-    latest_version="v25.4.30"
+    latest_version="v25.5.16"
 fi
 
 # 下载
