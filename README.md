@@ -5,6 +5,7 @@
 使用https://github.com/hkfires/Keep-Serv00-Alive 脚本node保护进程  
 
 linux更新xray
+
 wget -qO- https://raw.githubusercontent.com/good-xuan/serv00/refs/heads/main/linux_xray.sh | bash
 
 步骤如下：  
