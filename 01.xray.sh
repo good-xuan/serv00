@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 获取最新版本号
-latest_version=$(curl -Ls https://data.jsdelivr.com/v1/package/gh/XTLS/Xray-core | grep -Eo '"[0-9.]+",' | sed -n 1p | tr -d '",')
+latest_version=v$(curl -Ls https://data.jsdelivr.com/v1/package/gh/XTLS/Xray-core | grep -Eo '"[0-9.]+",' | sed -n 1p | tr -d '",')
 
 # 如果没有获取到信息，设置默认值
 if [ -z "$latest_version" ]; then
