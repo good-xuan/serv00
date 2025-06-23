@@ -1,0 +1,11 @@
+{
+    "name": "http",
+    "version": "1.0",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "axios": "*",
+        "express": "*"
+    }
+}
