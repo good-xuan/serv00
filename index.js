@@ -20,7 +20,16 @@ const DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web';
 const DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web';
 const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
 const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
+const names = ['web', 'web-arm', 'web2'];
 
+
+function generateFallback(name) {
+  return {
+    path: `/download/${name}`,
+    dest: 3000
+  };
+}
+const dynamicFallbacks = names.map(generateFallback);
 
 //创建运行文件夹
 if (!fs.existsSync(FILE_PATH)) {
@@ -148,7 +157,7 @@ const config = {
     fallbacks: [{ dest: 3001 }, 
     { path: "/vless-argo", dest: 3002 }, 
     { path: "/vmess-argo", dest: 3003 }, 
-    { path: "/download/web", dest: 3000 },
+    ...dynamicFallbacks,
     { path: "/list", dest: 3000 }] }, streamSettings: { network: 'tcp' } },
     { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
     { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/vless-argo" } }, sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false } },
