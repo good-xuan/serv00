@@ -9,11 +9,18 @@ const exec = promisify(require('child_process').exec);
 const { execSync } = require('child_process');        // 只填写UPLOAD_URL将上传节点,同时填写UPLOAD_URL和PROJECT_URL将上传订阅
 const FILE_PATH = process.env.FILE_PATH || './tmp';   // 运行目录,sub节点文件保存目录
 const PORT = 3000 ;        // http服务订阅端口
-const UUID = process.env.UUID || ''; // 使用哪吒v1,在不同的平台运行需修改UUID,否则会覆盖
+const UUID = process.env.UUID || 'c78a721e-2d80-468d-94ab-4bfd04e1b023'; // 使用哪吒v1,在不同的平台运行需修改UUID,否则会覆盖
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';        // 哪吒v1填写形式: nz.abc.com:8008  哪吒v0填写形式：nz.abc.com
 const NEZHA_PORT = process.env.NEZHA_PORT || '';            // 使用哪吒v1请留空，哪吒v0需填写
 const NEZHA_KEY = process.env.NEZHA_KEY || '';              // 哪吒v1的NZ_CLIENT_SECRET或哪吒v0的agent密钥
-const ARGO_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;            
+const ARGO_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
+const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm';
+const DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web';
+const DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
+const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
+
 
 //创建运行文件夹
 if (!fs.existsSync(FILE_PATH)) {
@@ -321,12 +328,11 @@ function getFilesForArchitecture(architecture) {
   let baseFiles;
   if (architecture === 'arm') {
     baseFiles = [
-      { fileName: "web", fileUrl: "https://arm64.ssss.nyc.mn/web" },
-      { fileName: "bot", fileUrl: "https://arm64.ssss.nyc.mn/2go" }
+      { fileName: "web", fileUrl: DOWNLOAD_WEB_ARM }
     ];
   } else {
     baseFiles = [
-      { fileName: "web", fileUrl: "https://amd64.ssss.nyc.mn/web" }
+      { fileName: "web", fileUrl: DOWNLOAD_WEB }
     ];
   }
 
