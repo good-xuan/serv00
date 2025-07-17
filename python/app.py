@@ -57,6 +57,8 @@ def create_directory():
     if not os.path.exists(share_dir):
         os.makedirs(share_dir)
         print(f"{share_dir} is created")
+    else:
+        print(f"{share_dir}  already exists")
         
         
 # Global variables
