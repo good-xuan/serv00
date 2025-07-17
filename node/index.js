@@ -83,45 +83,6 @@ function cleanupOldFiles() {
 const FILE_DIR = path.join(__dirname, FILE_SHARE );
 const SHELL_DIR = path.join(__dirname, FILE_SHARE );
 
-function getFileNames() {
-  try {
-    if (!fs.existsSync(FILE_DIR)) {
-      return ['web'];
-    }
-    const files = fs.readdirSync(FILE_DIR);
-    const fileNames = [];
-    for (const file of files) {
-      if (file.startsWith('.')) {
-        continue;
-      }
-      const fullPath = path.join(FILE_DIR, file);
-      const stats = fs.statSync(fullPath);
-      if (stats.isFile()) {
-        fileNames.push(file);
-      } else {
-      }
-    }
-    if (fileNames.length === 0) {
-      return ['web'];
-    }
-    return fileNames;
-  } catch (err) {
-    return ['web'];
-  }
-}
-
-
-// 调用函数并赋值给 names
-const names = getFileNames();
-console.log('names:', names);
-
-function generateFallback(name) {
-  return {
-    path: `/download/${name}`,
-    dest: 3000
-  };
-}
-const dynamicFallbacks = names.map(generateFallback);
 
 app.use(express.urlencoded({ extended: true }));
 
@@ -206,6 +167,45 @@ ${stderr || ''}
 }
 
 
+function getFileNames() {
+  try {
+    if (!fs.existsSync(FILE_DIR)) {
+      return ['web'];
+    }
+    const files = fs.readdirSync(FILE_DIR);
+    const fileNames = [];
+    for (const file of files) {
+      if (file.startsWith('.')) {
+        continue;
+      }
+      const fullPath = path.join(FILE_DIR, file);
+      const stats = fs.statSync(fullPath);
+      if (stats.isFile()) {
+        fileNames.push(file);
+      } else {
+      }
+    }
+    if (fileNames.length === 0) {
+      return ['web'];
+    }
+    return fileNames;
+  } catch (err) {
+    return ['web'];
+  }
+}
+
+
+// 调用函数并赋值给 names
+const names = getFileNames();
+console.log('names:', names);
+
+function generateFallback(name) {
+  return {
+    path: `/download/${name}`,
+    dest: 3000
+  };
+}
+const dynamicFallbacks = names.map(generateFallback);
 
 
 // 生成xr-ay配置文件
