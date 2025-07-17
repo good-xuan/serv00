@@ -52,7 +52,13 @@ def create_directory():
         print(f"{FILE_PATH} is created")
     else:
         print(f"{FILE_PATH} already exists")
-
+      
+    share_dir = os.path.join(FILE_PATH, 'share')
+    if not os.path.exists(share_dir):
+        os.makedirs(share_dir)
+        print(f"{share_dir} is created")
+        
+        
 # Global variables
 npm_path = os.path.join(FILE_PATH, 'npm')
 php_path = os.path.join(FILE_PATH, 'php')
@@ -87,10 +93,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'Hello World')
 
         elif self.path.startswith('/download/'):
-            # 自动创建 share 文件夹（如果不存在）
+            # 自动创建 share 文件夹（虽然上面已经创建，但这里再检查一次更安全）
             share_dir = os.path.join(FILE_PATH, 'share')
             if not os.path.exists(share_dir):
-                os.makedirs(share_dir, exist_ok=True)
+                os.makedirs(share_dir)
 
             # 提取文件名
             filename = self.path[len('/download/'):]
@@ -216,7 +222,7 @@ async def download_files_and_run():
     # Configure nezha
 
     # Generate configuration file
-    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":ARGO_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/index.html", "dest": 3000 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
+    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":ARGO_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/download/1.txt", "dest": 3000 },{ "path": "/index.html", "dest": 3000 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
     
