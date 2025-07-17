@@ -19,8 +19,8 @@ const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm
 const DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web';
 const DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web';
 const DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web';
-const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_OLD;
-const DOWNLOAD_WEB = DOWNLOAD_WEB_OLD;
+const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
+const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
 //const names = ['web', 'web-arm', 'web2'];
 
 
