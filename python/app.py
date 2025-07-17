@@ -14,8 +14,7 @@ from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Environment variables
-FILE_PATH = os.environ.get('FILE_PATH', './.cache')    
-SUB_PATH = os.environ.get('SUB_PATH', 'sub')            
+FILE_PATH = os.environ.get('FILE_PATH', './.cache')              
 PORT = 3000
 ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm'
@@ -81,60 +80,35 @@ def cleanup_old_files():
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/':
+        if self.path == '/index.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
             self.wfile.write(b'Hello World')
-            
-        elif self.path == f'/{SUB_PATH}':
-            try:
-                with open(sub_path, 'rb') as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header('Content-type', 'text/plain')
-                self.end_headers()
-                self.wfile.write(content)
-            except:
-                self.send_response(404)
-                self.end_headers()
-        else:
-            self.send_response(404)
-            self.end_headers()
 
-    def log_message(self, format, *args):
-        pass
-    paths_to_delete = ['web', 'bot', 'npm', 'php', 'boot.log', 'list.txt']
-    for file in paths_to_delete:
-        file_path = os.path.join(FILE_PATH, file)
-        try:
+        elif self.path.startswith('/download/'):
+            # 自动创建 share 文件夹（如果不存在）
+            share_dir = os.path.join(FILE_PATH, 'share')
+            if not os.path.exists(share_dir):
+                os.makedirs(share_dir, exist_ok=True)
+
+            # 提取文件名
+            filename = self.path[len('/download/'):]
+            safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '', filename)  # 防止路径穿越攻击
+            file_path = os.path.join(share_dir, safe_filename)
+
             if os.path.exists(file_path):
-                if os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-                else:
-                    os.remove(file_path)
-        except Exception as e:
-            print(f"Error removing {file_path}: {e}")
-
-
-    def do_GET(self):
-        if self.path == '/':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b'Hello World')
-            
-        elif self.path == f'/{SUB_PATH}':
-            try:
-                with open(sub_path, 'rb') as f:
-                    content = f.read()
                 self.send_response(200)
-                self.send_header('Content-type', 'text/plain')
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Disposition', f'attachment; filename="{safe_filename}"')
                 self.end_headers()
-                self.wfile.write(content)
-            except:
+                with open(file_path, 'rb') as f:
+                    self.wfile.write(f.read())
+            else:
                 self.send_response(404)
                 self.end_headers()
+                self.wfile.write(b'File not found')
+
         else:
             self.send_response(404)
             self.end_headers()
