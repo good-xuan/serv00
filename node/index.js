@@ -8,6 +8,7 @@ const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
 const { execSync } = require('child_process');        // 只填写UPLOAD_URL将上传节点,同时填写UPLOAD_URL和PROJECT_URL将上传订阅
 const FILE_PATH = process.env.FILE_PATH || './tmp';   // 运行目录,sub节点文件保存目录
+const FILE_SHARE = './share';
 const PORT = 3000 ;        // http服务订阅端口
 //const UUID = process.env.UUID || 'c78a721e-2d80-468d-94ab-4bfd04e1b023'; // 使用哪吒v1,在不同的平台运行需修改UUID,否则会覆盖
 const NEZHA_SERVER = process.env.NEZHA_SERVER || '';        // 哪吒v1填写形式: nz.abc.com:8008  哪吒v0填写形式：nz.abc.com
@@ -58,9 +59,9 @@ if (!fs.existsSync(FILE_PATH)) {
 
 if (!fs.existsSync(share)) {
   fs.mkdirSync(share);
-  console.log(`share is created`);
+  console.log(`${FILE_SHARE} is created`);
 } else {
-  console.log(`share already exists`);
+  console.log(`${FILE_SHARE} already exists`);
 }
 
 let npmPath = path.join(FILE_PATH, 'npm');
