@@ -13,14 +13,11 @@ from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Environment variables
-UPLOAD_URL = os.environ.get('UPLOAD_URL', '')          # 节点或订阅上传地址,只填写这个地址将上传节点,同时填写PROJECT_URL将上传订阅，例如：https://merge.serv00.net
-PROJECT_URL = os.environ.get('PROJECT_URL', '')        # 项目url,需要自动保活或自动上传订阅需要填写,例如：https://www.google.com,
-AUTO_ACCESS = os.environ.get('AUTO_ACCESS', 'false').lower() == 'true'  # false关闭自动保活, true开启自动保活，默认关闭
-FILE_PATH = os.environ.get('FILE_PATH', './.cache')    # 运行路径,sub.txt保存路径
-SUB_PATH = os.environ.get('SUB_PATH', 'sub')           # 订阅token,默认sub，例如：https://www.google.com/sub
-UUID = os.environ.get('UUID', '20e6e496-cf19-45c8-b883-14f5e11cd9f1')  # UUID,如使用哪吒v1,在不同的平台部署需要修改,否则会覆盖
-PORT = int(3000)   # Argo端口,使用固定隧道token需在cloudflare后台设置端口和这里一致
-ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999) # 订阅端口，如无法订阅，请手动修改为分配的端口
+FILE_PATH = os.environ.get('FILE_PATH', './.cache')    
+SUB_PATH = os.environ.get('SUB_PATH', 'sub')           
+UUID = os.environ.get('UUID', '20e6e496-cf19-45c8-b883-14f5e11cd9f1')  
+PORT = int(3000)   
+ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 
 # Create running folder
 def create_directory():
@@ -240,70 +237,10 @@ async def download_files_and_run():
 # Extract domains and generate sub.txt
 # Extract domains from cloudflared logs
 # Upload nodes to subscription service
-    if UPLOAD_URL and PROJECT_URL:
-        subscription_url = f"{PROJECT_URL}/{SUB_PATH}"
-        json_data = {
-            "subscription": [subscription_url]
-        }
-        
-        try:
-            response = requests.post(
-                f"{UPLOAD_URL}/api/add-subscriptions",
-                json=json_data,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                print('Subscription uploaded successfully')
-        except Exception as e:
-            pass
-    
-    elif UPLOAD_URL:
-        if not os.path.exists(list_path):
-            return
-        
-        with open(list_path, 'r') as f:
-            content = f.read()
-        
-        nodes = [line for line in content.split('\n') if any(protocol in line for protocol in ['vless://', 'vmess://', 'trojan://', 'hysteria2://', 'tuic://'])]
-        
-        if not nodes:
-            return
-        
-        json_data = json.dumps({"nodes": nodes})
-        
-        try:
-            response = requests.post(
-                f"{UPLOAD_URL}/api/add-nodes",
-                data=json_data,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                print('Nodes uploaded successfully')
-        except:
-            return None
-    else:
-        return
-    
+
 # Send notification to Telegram
 # Generate links and subscription content
 # Add automatic access task
-def add_visit_task():
-    if not AUTO_ACCESS or not PROJECT_URL:
-        print("Skipping adding automatic access task")
-        return
-    
-    try:
-        response = requests.post(
-            'https://keep.gvrander.eu.org/add-url',
-            json={"url": PROJECT_URL},
-            headers={"Content-Type": "application/json"}
-        )
-        print('automatic access task added successfully')
-    except Exception as e:
-        print(f'Failed to add URL: {e}')
-
 # Clean up files after 90 seconds
 def clean_files():
     def _cleanup():
@@ -332,7 +269,6 @@ async def start_server():
     cleanup_old_files()
     create_directory()
     await download_files_and_run()
-    add_visit_task()
     
     server_thread = Thread(target=run_server)
     server_thread.daemon = True
