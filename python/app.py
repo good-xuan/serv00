@@ -53,7 +53,7 @@ def create_directory():
     else:
         print(f"{FILE_PATH} already exists")
       
-    share_dir = os.path.join(FILE_PATH, 'share')
+    share_dir = os.path.join('./share')
     if not os.path.exists(share_dir):
         os.makedirs(share_dir)
         print(f"{share_dir} is created")
@@ -94,7 +94,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif self.path.startswith('/download/'):
             # 自动创建 share 文件夹（虽然上面已经创建，但这里再检查一次更安全）
-            share_dir = os.path.join(FILE_PATH, 'share')
+            share_dir = os.path.join('./share')
             if not os.path.exists(share_dir):
                 os.makedirs(share_dir)
 
