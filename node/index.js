@@ -86,8 +86,8 @@ function cleanupOldFiles() {
 
 // 根路由
 
-const FILE_DIR = path.join(__dirname, 'share');
-const SHELL_DIR = path.join(__dirname, 'share');
+const FILE_DIR = path.join(__dirname, FILE_SHARE );
+const SHELL_DIR = path.join(__dirname, FILE_SHARE );
 
 app.use(express.urlencoded({ extended: true }));
 
