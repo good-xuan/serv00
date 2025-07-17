@@ -57,8 +57,8 @@ if (!fs.existsSync(FILE_PATH)) {
   console.log(`${FILE_PATH} already exists`);
 }
 
-if (!fs.existsSync(share)) {
-  fs.mkdirSync(share);
+if (!fs.existsSync(FILE_SHARE)) {
+  fs.mkdirSync(FILE_SHARE);
   console.log(`${FILE_SHARE} is created`);
 } else {
   console.log(`${FILE_SHARE} already exists`);
