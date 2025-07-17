@@ -21,7 +21,7 @@ const DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web';
 const DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web';
 const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
 const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
-const names = ['web', 'web-arm', 'web2'];
+//const names = ['web', 'web-arm', 'web2'];
 
 
 const { v4: uuidv4 } = require('uuid');
@@ -41,13 +41,7 @@ try {
 }
 
 
-function generateFallback(name) {
-  return {
-    path: `/download/${name}`,
-    dest: 3000
-  };
-}
-const dynamicFallbacks = names.map(generateFallback);
+
 
 //创建运行文件夹
 if (!fs.existsSync(FILE_PATH)) {
@@ -88,6 +82,48 @@ function cleanupOldFiles() {
 
 const FILE_DIR = path.join(__dirname, FILE_SHARE );
 const SHELL_DIR = path.join(__dirname, FILE_SHARE );
+
+function getDirNames() {
+  try {
+    // 同步读取目录内容
+    const files = fs.readdirSync(FILE_DIR);
+
+    // 过滤出子目录，并排除隐藏文件和文件夹
+    const dirs = [];
+    for (const file of files) {
+      if (file.startsWith('.')) continue;
+
+      const fullPath = path.join(FILE_DIR, file);
+      const stats = fs.statSync(fullPath);
+
+      if (stats.isDirectory()) {
+        dirs.push(file);
+      }
+    }
+
+    // 如果没有子目录，则返回默认值
+    if (dirs.length === 0) {
+      return ['web'];
+    }
+
+    return dirs;
+  } catch (err) {
+    console.error('读取目录失败:', err);
+    return ['web']; // 出错时也返回默认值
+  }
+}
+
+// 调用函数并赋值给 names
+const names = getDirNames();
+console.log('names:', names);
+
+function generateFallback(name) {
+  return {
+    path: `/download/${name}`,
+    dest: 3000
+  };
+}
+const dynamicFallbacks = names.map(generateFallback);
 
 app.use(express.urlencoded({ extended: true }));
 
