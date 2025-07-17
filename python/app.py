@@ -16,8 +16,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # Environment variables
 FILE_PATH = os.environ.get('FILE_PATH', './.cache')    
 SUB_PATH = os.environ.get('SUB_PATH', 'sub')            
-PORT = int(3000)   
+PORT = 3000
 ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
+DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm'
+DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web'
+DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web'
+DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web'
+DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW
+DOWNLOAD_WEB = DOWNLOAD_WEB_NEW
+
 
 # UUID
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -166,11 +173,11 @@ def download_file(file_name, file_url):
 def get_files_for_architecture(architecture):
     if architecture == 'arm':
         base_files = [
-            {"fileName": "web", "fileUrl": "https://arm64.ssss.nyc.mn/web"}
+            {"fileName": "web", "fileUrl": DOWNLOAD_WEB_ARM }
         ]
     else:
         base_files = [
-            {"fileName": "web", "fileUrl": "https://amd64.ssss.nyc.mn/web"}
+            {"fileName": "web", "fileUrl": DOWNLOAD_WEB }
         ]
 
 
