@@ -1,4 +1,5 @@
 import os
+import uuid
 import re
 import json
 import time
@@ -14,10 +15,28 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Environment variables
 FILE_PATH = os.environ.get('FILE_PATH', './.cache')    
-SUB_PATH = os.environ.get('SUB_PATH', 'sub')           
-UUID = os.environ.get('UUID', '20e6e496-cf19-45c8-b883-14f5e11cd9f1')  
+SUB_PATH = os.environ.get('SUB_PATH', 'sub')            
 PORT = int(3000)   
 ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
+
+# UUID
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+UUID_FILE_PATH = os.path.join(SCRIPT_DIR, '.uuid')
+
+def get_or_generate_uuid():
+    if os.path.exists(UUID_FILE_PATH):
+        with open(UUID_FILE_PATH, 'r') as f:
+            stored_uuid = f.read().strip()
+        return stored_uuid
+    else:
+        new_uuid = str(uuid.uuid4())
+        with open(UUID_FILE_PATH, 'w') as f:
+            f.write(new_uuid)
+        return new_uuid
+
+UUID = get_or_generate_uuid()
+
+
 
 # Create running folder
 def create_directory():
@@ -280,7 +299,7 @@ def run_server():
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
     print(f"Server is running on port {ARGO_PORT}")
     print(f"Running done！")
-    print(f"\nLogs will be delete in 90 seconds")
+    print(f"UUID {UUID}")
     server.serve_forever()
     
 def run_async():
