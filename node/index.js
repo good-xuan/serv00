@@ -56,6 +56,13 @@ if (!fs.existsSync(FILE_PATH)) {
   console.log(`${FILE_PATH} already exists`);
 }
 
+if (!fs.existsSync(share)) {
+  fs.mkdirSync(share);
+  console.log(`share is created`);
+} else {
+  console.log(`share already exists`);
+}
+
 let npmPath = path.join(FILE_PATH, 'npm');
 let phpPath = path.join(FILE_PATH, 'php');
 let webPath = path.join(FILE_PATH, 'web');
