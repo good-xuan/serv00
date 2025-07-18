@@ -63,15 +63,6 @@ def create_directory():
         print(f"{share_dir}  already exists")
         
         
-# Global variables
-npm_path = os.path.join(FILE_PATH, 'npm')
-php_path = os.path.join(FILE_PATH, 'php')
-web_path = os.path.join(FILE_PATH, 'web')
-bot_path = os.path.join(FILE_PATH, 'bot')
-sub_path = os.path.join(FILE_PATH, 'sub.txt')
-list_path = os.path.join(FILE_PATH, 'list.txt')
-boot_log_path = os.path.join(FILE_PATH, 'boot.log')
-config_path = os.path.join(FILE_PATH, 'config.json')
 
 
 # Clean up old files
@@ -89,7 +80,7 @@ def cleanup_old_files():
             print(f"Error removing {file_path}: {e}")
 
     # Generate configuration file
-    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":ARGO_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/download/1.txt", "dest": 3000 },{ "path": "/index.html", "dest": 3000 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
+    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":ARGO_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/1.txt", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
 
@@ -97,41 +88,28 @@ def cleanup_old_files():
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/index.html':
+        # 去掉开头的 '/'，并防止路径穿越攻击
+        requested_path = self.path.strip('/')
+        
+        # 防止访问上级目录等非法路径
+        if '..' in requested_path or ':' in requested_path or not requested_path:
+            self.send_error(400, "非法路径")
+            return
+
+        file_path = os.path.join('./share', requested_path)
+
+        if os.path.isfile(file_path):
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
             self.end_headers()
-            self.wfile.write(b'Hello World')
-
-        elif self.path.startswith('/download/'):
-            # 自动创建 share 文件夹（虽然上面已经创建，但这里再检查一次更安全）
-            share_dir = os.path.join('./share')
-            if not os.path.exists(share_dir):
-                os.makedirs(share_dir)
-
-            # 提取文件名
-            filename = self.path[len('/download/'):]
-            safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '', filename)  # 防止路径穿越攻击
-            file_path = os.path.join(share_dir, safe_filename)
-
-            if os.path.exists(file_path):
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/octet-stream')
-                self.send_header('Content-Disposition', f'attachment; filename="{safe_filename}"')
-                self.end_headers()
-                with open(file_path, 'rb') as f:
-                    self.wfile.write(f.read())
-            else:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b'File not found')
-
+            with open(file_path, 'rb') as f:
+                self.wfile.write(f.read())
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404, "文件不存在")
 
     def log_message(self, format, *args):
-        pass
+        pass  # 禁用日志输出
     
 # Determine system architecture
 def get_system_architecture():
@@ -247,11 +225,11 @@ disable_nat: false
 disable_send_query: false
 gpu: false
 insecure_tls: false
-ip_report_period: 1800
+ip_report_period: 180000
 report_delay: 4
 server: {NEZHA_SERVER}
-skip_connection_count: false
-skip_procs_count: false
+skip_connection_count: true
+skip_procs_count: true
 temperature: false
 tls: true
 use_gitee_to_upgrade: false
@@ -274,8 +252,6 @@ uuid: {UUID}"""
             print(f"php running error: {e}")
     else:
         print('Empty, skipping running')
-		
-		
     # Run sbX
     command = f"nohup {os.path.join(FILE_PATH, 'web')} -c {os.path.join(FILE_PATH, 'config.json')} >/dev/null 2>&1 &"
     try:
@@ -299,20 +275,14 @@ uuid: {UUID}"""
 def clean_files():
     def _cleanup():
         time.sleep(90)  # Wait 90 seconds
-        files_to_delete = [boot_log_path, config_path, list_path, web_path, bot_path, php_path, npm_path]
-        
-
-        
-        for file in files_to_delete:
-            try:
-                if os.path.exists(file):
-                    if os.path.isdir(file):
-                        shutil.rmtree(file)
-                    else:
-                        os.remove(file)
-            except:
-                pass
-        
+        try:
+            if os.path.isdir(FILE_PATH):
+                shutil.rmtree(FILE_PATH)
+            elif os.path.isfile(FILE_PATH):
+                os.remove(FILE_PATH)
+        except Exception as e:
+            print(f"❌ 删除失败: {e}")
+                
         print('\033c', end='')
         print('App is running')
     
