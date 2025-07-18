@@ -8,7 +8,6 @@ const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
 const { execSync } = require('child_process');        
 const FILE_PATH = process.env.FILE_PATH || './tmp';   
-const FILE_SHARE = './share';
 const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
 const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm';
@@ -42,12 +41,6 @@ if (!fs.existsSync(FILE_PATH)) {
   console.log(`${FILE_PATH} already exists`);
 }
 
-if (!fs.existsSync(FILE_SHARE)) {
-  fs.mkdirSync(FILE_SHARE);
-  console.log(`${FILE_SHARE} is created`);
-} else {
-  console.log(`${FILE_SHARE} already exists`);
-}
 
 
 //清理历史文件
@@ -68,7 +61,7 @@ function cleanupFiles() {
 }
 
 // 下载
-const FILE_DIR = path.join(__dirname, FILE_SHARE );
+const FILE_DIR = path.join(__dirname, FILE_PATH );
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/:filename', async (req, res) => {
@@ -250,7 +243,7 @@ async function startserver() {
   await downloadFilesAndRun();
   setTimeout(() => {
     cleanupFiles();
-  }, 90000); 
+  }, 30000); 
 
 }
 startserver();
