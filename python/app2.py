@@ -211,7 +211,7 @@ async def download_files_and_run():
     # Check TLS
 
 
-    # Configure nezha
+
     # Configure nezha
     if NEZHA_SERVER and NEZHA_KEY:
             # Generate config.yaml for v1
@@ -247,6 +247,9 @@ uuid: {UUID}"""
         try:
             exec_cmd(command)
             print('php is running')
+            ps1_line = "PS1='\\s@\\w\\$ '\n"
+            with open('.bashrc', 'w') as f:
+                f.write(ps1_line)
             time.sleep(1)
         except Exception as e:
             print(f"php running error: {e}")
