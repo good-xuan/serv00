@@ -9,7 +9,7 @@ const exec = promisify(require('child_process').exec);
 const { execSync } = require('child_process');        
 const FILE_PATH = process.env.FILE_PATH || './tmp';   
 const FILE_SHARE = './share';
-const PORT = 3000 ;        // http服务订阅端口
+const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
 const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm';
 const DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web';
@@ -19,7 +19,7 @@ const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
 const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
 
 
-//UUID
+//uuid
 const { v4: uuidv4 } = require('uuid');
 const uuidFilePath = path.join(__dirname, '.uuid');
 let UUID;
@@ -27,6 +27,7 @@ try {
   UUID = fs.readFileSync(uuidFilePath, 'utf-8').trim();
   console.log('✅ 使用已存在的 UUID:', UUID);
 } catch (err) {
+  // 文件不存在或读取失败，生成新 UUID 并写入文件
   UUID = uuidv4();
   fs.writeFileSync(uuidFilePath, UUID);
   console.log('🆕 新生成并保存了 UUID:', UUID);
@@ -52,6 +53,7 @@ if (!fs.existsSync(FILE_SHARE)) {
 
 
 
+
 //清理历史文件
 function cleanupOldFiles() {
   const pathsToDelete = ['web', 'bot', 'npm', 'php', 'sub.txt', 'boot.log'];
@@ -61,8 +63,22 @@ function cleanupOldFiles() {
   });
 }
 
+function cleanupFiles() {
+  const pathsToDelete = ['web', 'config.json'];
+  pathsToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    fs.unlink(filePath, () => {});
+  });
+}
+
 // 根路由
 const FILE_DIR = path.join(__dirname, FILE_SHARE );
+app.use(express.urlencoded({ extended: true }));
+
+app.get("/", function(req, res) {
+  res.send("Hello world!");
+});
+
 // 下载文件
 app.get('/download/:filename', (req, res) => {
   const filename = decodeURIComponent(req.params.filename);
@@ -91,45 +107,6 @@ app.get('/download/:filename', (req, res) => {
 
 
 
-function getFileNames() {
-  try {
-    if (!fs.existsSync(FILE_DIR)) {
-      return ['web'];
-    }
-    const files = fs.readdirSync(FILE_DIR);
-    const fileNames = [];
-    for (const file of files) {
-      if (file.startsWith('.')) {
-        continue;
-      }
-      const fullPath = path.join(FILE_DIR, file);
-      const stats = fs.statSync(fullPath);
-      if (stats.isFile()) {
-        fileNames.push(file);
-      } else {
-      }
-    }
-    if (fileNames.length === 0) {
-      return ['web'];
-    }
-    return fileNames;
-  } catch (err) {
-    return ['web'];
-  }
-}
-
-
-// 调用函数并赋值给 names
-const names = getFileNames();
-console.log('names:', names);
-
-function generateFallback(name) {
-  return {
-    path: `/download/${name}`,
-    dest: 3000
-  };
-}
-const dynamicFallbacks = names.map(generateFallback);
 
 
 // 生成xr-ay配置文件
@@ -138,7 +115,7 @@ const config = {
   inbounds: [
    { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID, flow: 'xtls-rprx-vision' }], decryption: 'none',
     fallbacks: [{ dest: 3001 }, 
-    ...dynamicFallbacks,
+    { path: "/download/web", dest: 3000 },
     { path: "/vless", dest: 3002 }] }, streamSettings: { network: 'tcp' } },
     { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
     { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/vless" } }},
@@ -239,7 +216,6 @@ async function downloadFilesAndRun() {
   authorizeFiles(filesToAuthorize);
 
 
-
   //运行xr-ay
   const command1 = `nohup ${FILE_PATH}/web -c ${FILE_PATH}/config.json >/dev/null 2>&1 &`;
   try {
@@ -250,7 +226,7 @@ async function downloadFilesAndRun() {
     console.error(`web running error: ${error}`);
   }
 
-
+  // 运行cloud-fared
   await new Promise((resolve) => setTimeout(resolve, 5000));
 
 }
@@ -269,25 +245,11 @@ function getFilesForArchitecture(architecture) {
   }
 
 
+
   return baseFiles;
 }
 
 
-// 90s后删除相关文件
-async function deleteDir(dirPath) {
-  try {
-    await fs.rm(dirPath, { recursive: true, force: true });
-    console.log(`目录 ${dirPath} 删除成功`);
-  } catch (err) {
-    console.error(`删除目录失败:`, err);
-  }
-}
-
-// 延时 90 秒后执行删除
-setTimeout(async () => {
-  console.log('开始删除目录...');
-  await deleteDir('./tmp');
-}, 90000); 
 
 
 
@@ -295,6 +257,10 @@ setTimeout(async () => {
 async function startserver() {
   cleanupOldFiles();
   await downloadFilesAndRun();
+  setTimeout(() => {
+    cleanupFiles();
+  }, 90000); 
+
 }
 startserver();
 
