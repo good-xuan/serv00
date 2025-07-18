@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # Environment variables
 FILE_PATH = os.environ.get('FILE_PATH', './.cache')              
 PORT = 3000
-ARGO_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
+WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm'
 DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web'
 DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web'
@@ -80,7 +80,7 @@ def cleanup_old_files():
             print(f"Error removing {file_path}: {e}")
 
     # Generate configuration file
-    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":ARGO_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/1.txt", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
+    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/1.txt", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
 
@@ -302,7 +302,7 @@ async def start_server():
     
 def run_server():
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
-    print(f"Server is running on port {ARGO_PORT}")
+    print(f"Server is running on port {WORK_PORT}")
     print(f"Running done！")
     print(f"UUID {UUID}")
     server.serve_forever()
