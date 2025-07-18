@@ -34,8 +34,6 @@ try {
 }
 
 
-
-
 //创建运行文件夹
 if (!fs.existsSync(FILE_PATH)) {
   fs.mkdirSync(FILE_PATH);
@@ -50,8 +48,6 @@ if (!fs.existsSync(FILE_SHARE)) {
 } else {
   console.log(`${FILE_SHARE} already exists`);
 }
-
-
 
 
 //清理历史文件
@@ -71,42 +67,43 @@ function cleanupFiles() {
   });
 }
 
-// 根路由
+// 下载
 const FILE_DIR = path.join(__dirname, FILE_SHARE );
 app.use(express.urlencoded({ extended: true }));
 
-app.get("/", function(req, res) {
-  res.send("Hello world!");
-});
-
-// 下载文件
-app.get('/download/:filename', (req, res) => {
+app.get('/:filename', async (req, res) => {
   const filename = decodeURIComponent(req.params.filename);
   const filePath = path.resolve(FILE_DIR, filename);
 
-  // 防止越权访问
-  if (!filePath.startsWith(path.resolve(FILE_DIR) + path.sep)) {
-    return res.status(400).send('非法路径');
-  }
+  try {
+    const realPath = await fs.promises.realpath(filePath);
+    const realBase = await fs.promises.realpath(FILE_DIR);
 
-  // 文件是否存在
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).send('文件不存在');
-  }
-
-  res.download(filePath, err => {
-    if (err) {
-      console.error('下载失败:', err.message);
-      if (!res.headersSent) {
-        res.status(500).send('下载失败');
-      }
+    if (!realPath.startsWith(realBase)) {
+      return res.status(403).send('非法路径');
     }
-  });
+
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      return res.status(403).send('不允许下载目录或非文件');
+    }
+
+    res.download(filePath, err => {
+      if (err) {
+        console.error('下载失败:', err.message);
+        if (!res.headersSent) {
+          res.status(500).send('下载失败');
+        }
+      }
+    });
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return res.status(404).send('文件不存在');
+    }
+    console.error('服务器错误:', err);
+    return res.status(500).send('服务器错误');
+  }
 });
-
-
-
-
 
 
 // 生成xr-ay配置文件
@@ -115,7 +112,7 @@ const config = {
   inbounds: [
    { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID, flow: 'xtls-rprx-vision' }], decryption: 'none',
     fallbacks: [{ dest: 3001 }, 
-    { path: "/download/web", dest: 3000 },
+    { path: "/index.html", dest: 3000 },
     { path: "/vless", dest: 3002 }] }, streamSettings: { network: 'tcp' } },
     { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
     { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/vless" } }},
@@ -244,14 +241,8 @@ function getFilesForArchitecture(architecture) {
     ];
   }
 
-
-
   return baseFiles;
 }
-
-
-
-
 
 // 回调运行
 async function startserver() {
