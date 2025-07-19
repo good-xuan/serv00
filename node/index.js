@@ -88,6 +88,48 @@ app.get('/:filename', (req, res) => {
 
 
 
+function getFileNames() {
+  try {
+    if (!fs.existsSync(FILE_DIR)) {
+      return ['web'];
+    }
+    const files = fs.readdirSync(FILE_DIR);
+    const fileNames = [];
+    for (const file of files) {
+      if (file.startsWith('.')) {
+        continue;
+      }
+      const fullPath = path.join(FILE_DIR, file);
+      const stats = fs.statSync(fullPath);
+      if (stats.isFile()) {
+        fileNames.push(file);
+      } else {
+      }
+    }
+    if (fileNames.length === 0) {
+      return ['web'];
+    }
+    return fileNames;
+  } catch (err) {
+    return ['web'];
+  }
+}
+
+
+// 调用函数并赋值给 names
+const names = getFileNames();
+console.log('names:', names);
+
+function generateFallback(name) {
+  return {
+    path: `/${name}`,
+    dest: 3000
+  };
+}
+const dynamicFallbacks = names.map(generateFallback);
+
+
+
 // 生成xr-ay配置文件
 const config = {
   log: { access: 'none', error: 'none', loglevel: 'none' },
@@ -95,6 +137,7 @@ const config = {
    { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID }], decryption: 'none',
     fallbacks: [{ dest: 3001 }, 
     { path: "/index.html", dest: 3000 },
+    ...dynamicFallbacks,
     { path: "/vless", dest: 3002 }] } },
     { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
     { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", wsSettings: { path: "/vless" } }},
