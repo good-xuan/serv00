@@ -11,12 +11,14 @@ const FILE_PATH= path.resolve(__dirname, 'tmp');
 const FILE_DIR = path.resolve(__dirname, 'share');
 const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
-const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm';
-const DOWNLOAD_WEB_NEW = 'http://fi10.bot-hosting.net:20980/download/web';
-const DOWNLOAD_WEB_ARM_OLD = 'https://arm64.ssss.nyc.mn/web';
-const DOWNLOAD_WEB_OLD = 'https://amd64.ssss.nyc.mn/web';
-const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_NEW;
-const DOWNLOAD_WEB = DOWNLOAD_WEB_NEW;
+const DOWNLOAD_WEB_1 = 'https://amd64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/download/web';
+const DOWNLOAD_WEB = DOWNLOAD_WEB_2;
+
+const DOWNLOAD_WEB_ARM_1 = 'https://arm64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/download/web-arm';
+const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_2;
+
 
 
 //uuid
