@@ -12,11 +12,11 @@ const FILE_DIR = path.resolve(__dirname, 'share');
 const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
 const DOWNLOAD_WEB_1 = 'https://amd64.ssss.nyc.mn/web';
-const DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/download/web';
+const DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/web';
 const DOWNLOAD_WEB = DOWNLOAD_WEB_2;
 
 const DOWNLOAD_WEB_ARM_1 = 'https://arm64.ssss.nyc.mn/web';
-const DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/download/web-arm';
+const DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/web-arm';
 const DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_2;
 
 
@@ -136,11 +136,10 @@ const config = {
   inbounds: [
    { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID }], decryption: 'none',
     fallbacks: [{ dest: 3001 }, 
-    { path: "/index.html", dest: 3000 },
     ...dynamicFallbacks,
     { path: "/vless", dest: 3002 }] } },
-    { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
-    { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", wsSettings: { path: "/vless" } }},
+    { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
+    { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID }], decryption: "none" }, streamSettings: { network: "ws", wsSettings: { path: "/vless" } }},
   ],
   dns: { servers: ["https+local://1.1.1.1/dns-query"],"disableCache": true },
   outbounds: [ { protocol: "freedom", tag: "direct","settings": {"domainStrategy": "UseIPv4v6"} }, {protocol: "blackhole", tag: "block"} ]
