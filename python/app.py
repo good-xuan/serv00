@@ -79,36 +79,36 @@ def cleanup_old_files():
             print(f"Error removing {file_path}: {e}")
 
     # Generate configuration file
-    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID,"flow":"xtls-rprx-vision"}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/1.txt", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]},"streamSettings":{"network":"tcp"}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"},"security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
+    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/index.html", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
 
 
-
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # 去掉开头的 '/'，并防止路径穿越攻击
-        requested_path = self.path.strip('/')
+        safe_path = os.path.normpath(self.path)
+        full_path = os.path.join('./share', safe_path.lstrip('/'))
         
-        # 防止访问上级目录等非法路径
-        if '..' in requested_path or ':' in requested_path or not requested_path:
-            self.send_error(400, "非法路径")
+        if not full_path.startswith('./share'):
+            self.send_error(403)
             return
-
-        file_path = os.path.join('./share', requested_path)
-
-        if os.path.isfile(file_path):
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/octet-stream')
-            self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
-            self.end_headers()
-            with open(file_path, 'rb') as f:
+        
+        try:
+            with open(full_path, 'rb') as f:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/octet-stream')
+                self.end_headers()
                 self.wfile.write(f.read())
-        else:
-            self.send_error(404, "文件不存在")
+        except FileNotFoundError:
+            self.send_error(404)
+        except PermissionError:
+            self.send_error(403)
+        except Exception as e:
+            self.send_error(500)
+
 
     def log_message(self, format, *args):
-        pass  # 禁用日志输出
+        pass  
     
 # Determine system architecture
 def get_system_architecture():
