@@ -65,6 +65,20 @@ def create_directory():
     else:
         print(f"{SHARE_DIR}  already exists")
         
+# 获取目录下所有文件
+def get_all_files(directory):
+    file_configs = []
+    for filename in os.listdir(directory):
+        if os.path.isfile(os.path.join(directory, filename)):
+            file_config = {
+                "path": f"/{filename}",
+                "dest": 3000
+            }
+            file_configs.append(file_config)
+    return file_configs
+
+file_configs = get_all_files(SHARE_DIR)
+
         
 
 
@@ -88,7 +102,7 @@ def cleanup_old_files():
 	"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none",
 	"fallbacks":[{"dest":3001},
 	{ "path": "/index.html", "dest": 3000 },
-	{ "path": "/vless", "dest": 3002 }]}},
+	{ "path": "/vless", "dest": 3002 }] + file_configs}},
 	{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],
 	"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
