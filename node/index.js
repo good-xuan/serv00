@@ -7,8 +7,8 @@ const path = require("path");
 const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
 const { execSync } = require('child_process');        
-const FILE_PATH = process.env.FILE_PATH || './tmp'; 
-const FILE_DIR = './share';  
+const FILE_PATH= path.resolve(__dirname, 'tmp');
+const FILE_DIR = path.resolve(__dirname, 'share');
 const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
 const DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm';
@@ -27,7 +27,6 @@ try {
   UUID = fs.readFileSync(uuidFilePath, 'utf-8').trim();
   console.log('✅ 使用已存在的 UUID:', UUID);
 } catch (err) {
-  // 文件不存在或读取失败，生成新 UUID 并写入文件
   UUID = uuidv4();
   fs.writeFileSync(uuidFilePath, UUID);
   console.log('🆕 新生成并保存了 UUID:', UUID);
@@ -69,53 +68,34 @@ function cleanupFiles() {
 }
 
 // 下载
-app.use(express.urlencoded({ extended: true }));
+app.get('/:filename', (req, res) => {
+  const filePath = path.join(FILE_DIR, decodeURIComponent(req.params.filename));
 
-app.get('/:filename', async (req, res) => {
-  const filename = decodeURIComponent(req.params.filename);
-  const filePath = path.resolve(FILE_DIR, filename);
-
-  try {
-    const realPath = await fs.promises.realpath(filePath);
-    const realBase = await fs.promises.realpath(FILE_DIR);
-
-    if (!realPath.startsWith(realBase)) {
-      return res.status(403).send('非法路径');
-    }
-
-    const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return res.status(403).send('不允许下载目录或非文件');
-    }
-
-    res.download(filePath, err => {
-      if (err) {
-        console.error('下载失败:', err.message);
-        if (!res.headersSent) {
-          res.status(500).send('下载失败');
-        }
-      }
-    });
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      return res.status(404).send('文件不存在');
-    }
-    console.error('服务器错误:', err);
-    return res.status(500).send('服务器错误');
+  // Quick security check to prevent directory traversal
+  if (!filePath.startsWith(FILE_DIR)) {
+    return res.status(403).send('Illegal file path');
   }
+
+  res.download(filePath, err => {
+    if (err) {
+      console.error('Download failed:', err.message);
+      res.status(500).send('File download error');
+    }
+  });
 });
+
 
 
 // 生成xr-ay配置文件
 const config = {
   log: { access: 'none', error: 'none', loglevel: 'none' },
   inbounds: [
-   { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID, flow: 'xtls-rprx-vision' }], decryption: 'none',
+   { port: WORK_PORT, protocol: 'vless', settings: { clients: [{ id: UUID }], decryption: 'none',
     fallbacks: [{ dest: 3001 }, 
     { path: "/index.html", dest: 3000 },
-    { path: "/vless", dest: 3002 }] }, streamSettings: { network: 'tcp' } },
+    { path: "/vless", dest: 3002 }] } },
     { port: 3001, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "xhttp",xhttpSettings: { path: "/xh" } } },
-    { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", security: "none", wsSettings: { path: "/vless" } }},
+    { port: 3002, listen: "127.0.0.1", protocol: "vless", settings: { clients: [{ id: UUID, level: 0 }], decryption: "none" }, streamSettings: { network: "ws", wsSettings: { path: "/vless" } }},
   ],
   dns: { servers: ["https+local://1.1.1.1/dns-query"],"disableCache": true },
   outbounds: [ { protocol: "freedom", tag: "direct","settings": {"domainStrategy": "UseIPv4v6"} }, {protocol: "blackhole", tag: "block"} ]
