@@ -19,13 +19,8 @@ SHARE_DIR = os.path.join(os.path.dirname(__file__), 'share')
 PORT = 3000
 WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 
-DOWNLOAD_WEB_1 = 'https://amd64.ssss.nyc.mn/web'
-DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/web'
-DOWNLOAD_WEB = DOWNLOAD_WEB_2
-
-DOWNLOAD_WEB_ARM_1 = 'https://arm64.ssss.nyc.mn/web'
-DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/web-arm'
-DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_2
+DOWNLOAD_WEB =     'http://fi10.bot-hosting.net:20980/web'                          #'https://amd64.ssss.nyc.mn/web'
+DOWNLOAD_WEB_ARM = 'http://fi10.bot-hosting.net:20980/web-arm'                      #'https://arm64.ssss.nyc.mn/web' 
 
        
 
