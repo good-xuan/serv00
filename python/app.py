@@ -68,14 +68,32 @@ def create_directory():
 # 获取目录下所有文件
 def get_all_files(directory):
     file_configs = []
-    for filename in os.listdir(directory):
-        if os.path.isfile(os.path.join(directory, filename)):
-            file_config = {
-                "path": f"/{filename}",
-                "dest": 3000
-            }
-            file_configs.append(file_config)
-    return file_configs
+    try:
+        if not os.path.exists(directory) or not os.path.isdir(directory):
+            return [{"path": "/index.html", "dest": 3000}]
+        
+        files = os.listdir(directory)
+        
+        if not files:
+            return [{"path": "/index.html", "dest": 3000}]
+        
+        for filename in files:
+            full_path = os.path.join(directory, filename)
+            if os.path.isfile(full_path):
+                file_config = {
+                    "path": f"/{filename}",
+                    "dest": 3000
+                }
+                file_configs.append(file_config)
+        
+        if not file_configs:
+            return [{"path": "/index.html", "dest": 3000}]
+        
+        return file_configs
+    
+    except Exception as e:
+        print(f"Error accessing directory: {e}")
+        return [{"path": "/index.html", "dest": 3000}]
 
 file_configs = get_all_files(SHARE_DIR)
 
