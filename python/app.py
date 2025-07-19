@@ -102,7 +102,7 @@ def cleanup_old_files():
 	"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none",
 	"fallbacks":[{"dest":3001},
 	{ "path": "/index.html", "dest": 3000 },
-	{ "path": "/vless", "dest": 3002 }] + file_configs}},
+	{ "path": "/vless", "dest": 3002 }] + file_configs}},    # 直接将file_configs添加到fallbacks列表中
 	{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],
 	"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
