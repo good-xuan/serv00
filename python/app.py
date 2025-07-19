@@ -13,8 +13,9 @@ import threading
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Environment variables
-FILE_PATH = os.environ.get('FILE_PATH', './.cache')              
+# Environment variables 
+FILE_PATH = os.environ.get('FILE_PATH', './.cache') 
+SHARE_DIR = os.path.join(os.path.dirname(__file__), 'share')             
 PORT = 3000
 WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 DOWNLOAD_WEB_ARM_NEW = 'http://fi10.bot-hosting.net:20980/download/web-arm'
@@ -46,6 +47,7 @@ UUID = get_or_generate_uuid()
 
 
 # Create running folder
+
 def create_directory():
     print('\033c', end='')
     if not os.path.exists(FILE_PATH):
@@ -54,12 +56,12 @@ def create_directory():
     else:
         print(f"{FILE_PATH} already exists")
       
-    share_dir = os.path.join('./share')
-    if not os.path.exists(share_dir):
-        os.makedirs(share_dir)
-        print(f"{share_dir} is created")
+
+    if not os.path.exists(SHARE_DIR):
+        os.makedirs(SHARE_DIR)
+        print(f"{SHARE_DIR} is created")
     else:
-        print(f"{share_dir}  already exists")
+        print(f"{SHARE_DIR}  already exists")
         
         
 
@@ -79,7 +81,14 @@ def cleanup_old_files():
             print(f"Error removing {file_path}: {e}")
 
     # Generate configuration file
-    config ={"log":{"access":"none","error":"none","loglevel":"none"},"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none","fallbacks":[{"dest":3001},{ "path": "/index.html", "dest": 3000 },{ "path": "/vless", "dest": 3002 }]}},{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
+    config ={"log":{"access":"none","error":"none","loglevel":"none"},
+	"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},
+	"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none",
+	"fallbacks":[{"dest":3001},
+	{ "path": "/index.html", "dest": 3000 },
+	{ "path": "/vless", "dest": 3002 }]}},
+	{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],
+	"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
 
@@ -87,9 +96,9 @@ def cleanup_old_files():
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         safe_path = os.path.normpath(self.path)
-        full_path = os.path.join('./share', safe_path.lstrip('/'))
+        full_path = os.path.join(SHARE_DIR, safe_path.lstrip('/'))
         
-        if not full_path.startswith('./share'):
+        if not full_path.startswith(SHARE_DIR):
             self.send_error(403)
             return
         
