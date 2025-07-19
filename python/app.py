@@ -20,11 +20,11 @@ PORT = 3000
 WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 
 DOWNLOAD_WEB_1 = 'https://amd64.ssss.nyc.mn/web'
-DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/download/web'
+DOWNLOAD_WEB_2 = 'http://fi10.bot-hosting.net:20980/web'
 DOWNLOAD_WEB = DOWNLOAD_WEB_2
 
 DOWNLOAD_WEB_ARM_1 = 'https://arm64.ssss.nyc.mn/web'
-DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/download/web-arm'
+DOWNLOAD_WEB_ARM_2 = 'http://fi10.bot-hosting.net:20980/web-arm'
 DOWNLOAD_WEB_ARM = DOWNLOAD_WEB_ARM_2
 
        
@@ -101,7 +101,6 @@ def cleanup_old_files():
 	"dns":{"servers":["https+local://1.1.1.1/dns-query"],"disableCache":True},
 	"inbounds":[{"port":WORK_PORT,"protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none",
 	"fallbacks":[{"dest":3001},
-	{ "path": "/index.html", "dest": 3000 },
 	{ "path": "/vless", "dest": 3002 }] + file_configs}},    # 直接将file_configs添加到fallbacks列表中
 	{"port":3001,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID}],"decryption":"none"},"streamSettings":{"network":"xhttp","xhttpSettings":{"path":"/xh"}}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID  }],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/vless"}}}],
 	"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"UseIPv4v6"}},{"protocol":"blackhole","tag":"block"}]}
