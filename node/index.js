@@ -12,8 +12,8 @@ const FILE_DIR = path.resolve(__dirname, 'share');
 const PORT = 3000 ;      
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;  
 
-DOWNLOAD_WEB =     'http://fi10.bot-hosting.net:20980/web'                          #'https://amd64.ssss.nyc.mn/web'
-DOWNLOAD_WEB_ARM = 'http://fi10.bot-hosting.net:20980/web-arm'                      #'https://arm64.ssss.nyc.mn/web' 
+DOWNLOAD_WEB =     'http://fi10.bot-hosting.net:20980/web'                          //'https://amd64.ssss.nyc.mn/web'
+DOWNLOAD_WEB_ARM = 'http://fi10.bot-hosting.net:20980/web-arm'                      //'https://arm64.ssss.nyc.mn/web' 
 
 
 
