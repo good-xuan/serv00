@@ -135,7 +135,7 @@ const config = {
 };
 
 fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
-console.log('⚙️ xr-ay 配置文件已生成');
+console.log('⚙️ 配置文件已生成');
 
 // 判断系统架构
 function getSystemArchitecture() {
