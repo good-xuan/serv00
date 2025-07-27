@@ -174,9 +174,7 @@ const startService = async () => {
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('hello');
-}).listen(3000, () => {
-  console.log(`📡 HTTP服务器运行在端口: ${PORT}`);
-});
+}).listen(3000);
 
 // 启动核心服务
 startService();
