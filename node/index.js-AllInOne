@@ -1,0 +1,380 @@
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { spawn } = require('child_process');
+const { pipeline } = require('stream/promises');
+
+// 简化的 UUID 生成器
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+// === 配置常量 ===
+const FILE_PATH = path.resolve(__dirname, 'tmp');
+const FILE_DIR = path.resolve(__dirname, 'share');
+const WORK_PORT = process.env.SERVER_PORT || 3100;
+
+const DOWNLOAD_WEB = process.env.DOWNLOAD_WEB || 'http://fi10.bot-hosting.net:20980/web';
+const DOWNLOAD_WEB_ARM = process.env.DOWNLOAD_WEB_ARM || 'http://fi10.bot-hosting.net:20980/web-arm';
+const DOWNLOAD_WEB_BACKUP = process.env.DOWNLOAD_WEB_BACKUP || 'https://amd64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_ARM_BACKUP = process.env.DOWNLOAD_WEB_ARM_BACKUP || 'https://arm64.ssss.nyc.mn/web';
+
+// UUID 持久化
+const uuidFilePath = path.join(__dirname, '.uuid');
+let UUID;
+
+try {
+  UUID = fs.readFileSync(uuidFilePath, 'utf-8').trim();
+  console.log('✅ 使用已存在的 UUID:', UUID);
+} catch (err) {
+  UUID = generateUUID();
+  fs.writeFileSync(uuidFilePath, UUID);
+  console.log('🆕 新生成并保存了 UUID:', UUID);
+}
+
+// 创建目录
+[FILE_PATH, FILE_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir);
+    console.log(`📁 已创建目录: ${dir}`);
+  } else {
+    console.log(`📁 目录已存在: ${dir}`);
+  }
+});
+
+// 清理旧文件
+function cleanupOldFiles() {
+  const filesToDelete = ['web', 'bot', 'npm', 'php', 'sub.txt', 'boot.log'];
+  filesToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ 删除旧文件: ${file}`);
+      } catch (e) {
+        // 忽略删除错误
+      }
+    }
+  });
+}
+
+function cleanupFiles() {
+  const filesToDelete = ['web', 'config.json'];
+  filesToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ 删除临时文件: ${file}`);
+      } catch (e) {
+        // 忽略删除错误
+      }
+    }
+  });
+}
+
+// 获取共享目录下的文件名
+function getFileNames() {
+  try {
+    if (!fs.existsSync(FILE_DIR)) return ['web'];
+    const files = fs.readdirSync(FILE_DIR)
+      .filter(file => !file.startsWith('.'))
+      .filter(file => fs.statSync(path.join(FILE_DIR, file)).isFile());
+    return files.length ? files : ['web'];
+  } catch (err) {
+    console.error("⚠️ 获取文件列表失败:", err.message);
+    return ['web'];
+  }
+}
+
+const names = getFileNames();
+console.log('📄 共享文件列表:', names);
+
+// 生成 fallback 配置项
+const dynamicFallbacks = names.map(name => ({
+  path: `/${name}`,
+  dest: 3000
+}));
+
+// 生成配置文件
+const config = {
+  log: { access: 'none', error: 'none', loglevel: 'none' },
+  inbounds: [
+    {
+      port: WORK_PORT,
+      protocol: 'vless',
+      settings: {
+        clients: [{ id: UUID }],
+        decryption: 'none',
+        fallbacks: [
+          { dest: 3001 },
+          ...dynamicFallbacks,
+          { path: "/vless", dest: 3002 }
+        ]
+      }
+    },
+    {
+      port: 3001,
+      listen: "127.0.0.1",
+      protocol: "vless",
+      settings: { clients: [{ id: UUID }], decryption: "none" },
+      streamSettings: { network: "xhttp", xhttpSettings: { path: "/xh" } }
+    },
+    {
+      port: 3002,
+      listen: "127.0.0.1",
+      protocol: "vless",
+      settings: { clients: [{ id: UUID }], decryption: "none" },
+      streamSettings: { network: "ws", wsSettings: { path: "/vless" } }
+    }
+  ],
+  dns: {
+    servers: ["https+local://1.1.1.1/dns-query"],
+    disableCache: true
+  },
+  outbounds: [
+    { protocol: "freedom", tag: "direct", settings: { domainStrategy: "UseIPv4v6" } },
+    { protocol: "blackhole", tag: "block" }
+  ]
+};
+
+fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+console.log('⚙️ 配置文件已生成');
+
+// 判断系统架构
+function getSystemArchitecture() {
+  const arch = os.arch();
+  return ['arm', 'arm64', 'aarch64'].includes(arch) ? 'arm' : 'amd';
+}
+
+// URL 解析函数
+function parseUrl(urlString) {
+  const url = new URL(urlString);
+  return {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port,
+    pathname: url.pathname + url.search
+  };
+}
+
+// 增强的下载函数：支持主备URL切换（使用内置模块）
+function downloadFileWithFallback(fileName, primaryUrl, backupUrl) {
+  return new Promise((resolve, reject) => {
+    const filePath = path.join(FILE_PATH, fileName);
+    
+    // 尝试从主URL下载
+    async function tryDownload(url, isBackup = false) {
+      try {
+        console.log(`📥 ${isBackup ? '备用' : '主'}URL下载: ${url}`);
+        
+        const urlParts = parseUrl(url);
+        const client = urlParts.protocol === 'https:' ? https : http;
+        
+        const request = client.get(url, { timeout: 30000 }, (response) => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            const fileStream = fs.createWriteStream(filePath);
+            
+            response.pipe(fileStream);
+            
+            fileStream.on('finish', () => {
+              fileStream.close();
+              console.log(`✅ 成功从${isBackup ? '备用' : '主'}URL下载: ${fileName}`);
+              resolve(fileName);
+            });
+            
+            fileStream.on('error', (err) => {
+              try { fs.unlinkSync(filePath); } catch(e) {}
+              console.error(`❌ 文件写入失败:`, err.message);
+              if (!isBackup) {
+                tryBackup();
+              } else {
+                reject(new Error('两个URL都下载失败'));
+              }
+            });
+          } else {
+            console.error(`❌ HTTP错误 ${response.statusCode}: ${url}`);
+            if (!isBackup) {
+              tryBackup();
+            } else {
+              reject(new Error('两个URL都下载失败'));
+            }
+          }
+        });
+        
+        request.on('error', (err) => {
+          console.error(`❌ 网络请求失败:`, err.message);
+          if (!isBackup) {
+            tryBackup();
+          } else {
+            reject(new Error('两个URL都下载失败'));
+          }
+        });
+        
+        request.on('timeout', () => {
+          request.destroy();
+          console.error(`❌ 请求超时: ${url}`);
+          if (!isBackup) {
+            tryBackup();
+          } else {
+            reject(new Error('两个URL都下载失败'));
+          }
+        });
+        
+      } catch (err) {
+        console.error(`❌ 下载异常:`, err.message);
+        if (!isBackup) {
+          tryBackup();
+        } else {
+          reject(new Error('两个URL都下载失败'));
+        }
+      }
+    }
+    
+    function tryBackup() {
+      tryDownload(backupUrl, true);
+    }
+    
+    // 开始尝试主URL下载
+    tryDownload(primaryUrl, false);
+  });
+}
+
+// 根据架构选择下载文件（包含主备URL）
+function getFilesForArchitecture(architecture) {
+  return architecture === 'arm'
+    ? [
+        { 
+          fileName: "web", 
+          primaryUrl: DOWNLOAD_WEB_ARM,
+          backupUrl: DOWNLOAD_WEB_ARM_BACKUP
+        }
+      ]
+    : [
+        { 
+          fileName: "web", 
+          primaryUrl: DOWNLOAD_WEB,
+          backupUrl: DOWNLOAD_WEB_BACKUP
+        }
+      ];
+}
+
+// 授权可执行权限
+function authorizeFiles(filePaths) {
+  filePaths.forEach(relativePath => {
+    const absolutePath = path.join(FILE_PATH, relativePath);
+    if (fs.existsSync(absolutePath)) {
+      try {
+        fs.chmodSync(absolutePath, 0o775);
+        console.log(`🔓 授权成功: ${relativePath}`);
+      } catch (e) {
+        console.error(`❌ 授权失败 ${relativePath}:`, e.message);
+      }
+    }
+  });
+}
+
+// 启动核心服务
+async function startServer() {
+  cleanupOldFiles();
+
+  const architecture = getSystemArchitecture();
+  console.log(`💻 当前系统架构: ${architecture}`);
+
+  const filesToDownload = getFilesForArchitecture(architecture);
+
+  try {
+    for (const file of filesToDownload) {
+      await downloadFileWithFallback(file.fileName, file.primaryUrl, file.backupUrl);
+    }
+  } catch (err) {
+    console.error("🚨 文件下载失败:", err.message);
+    return;
+  }
+
+  // 添加执行权限
+  authorizeFiles(['./web']);
+
+  // 启动 web 服务
+  try {
+    const webProcess = spawn(path.join(FILE_PATH, 'web'), ['-c', path.join(FILE_PATH, 'config.json')], {
+      stdio: 'ignore',
+      detached: true
+    });
+    
+    webProcess.unref();
+    console.log('🚀 web 服务已启动');
+  } catch (err) {
+    console.error("💥 启动 web 服务出错:", err.message);
+  }
+
+  // 延迟清理临时文件
+  setTimeout(() => {
+    cleanupFiles();
+  }, 30 * 1000);
+}
+
+// HTTP 服务器处理函数
+function handleRequest(req, res) {
+  // 文件下载接口
+  if (req.method === 'GET' && req.url.startsWith('/')) {
+    const filename = decodeURIComponent(req.url.substring(1));
+    const filePath = path.join(FILE_DIR, filename);
+
+    // 安全检查：防止路径穿越
+    if (!filePath.startsWith(FILE_DIR)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('非法路径');
+      return;
+    }
+
+    if (!fs.existsSync(filePath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('文件不存在');
+      return;
+    }
+
+    // 设置响应头
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${filename}"`
+    });
+
+    // 流式传输文件
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+
+    fileStream.on('error', (err) => {
+      console.error('❌ 文件读取失败:', err.message);
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('文件读取错误');
+    });
+
+    res.on('close', () => {
+      fileStream.destroy();
+    });
+
+    return;
+  }
+
+  // 默认404
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('Not Found');
+}
+
+// 启动 HTTP 服务器
+const server = http.createServer(handleRequest);
+server.listen(3000, () => {
+  console.log(`📡 HTTP 服务器运行在端口: ${WORK_PORT}`);
+});
+
+// 启动后台服务
+startServer().catch(err => {
+  console.error("🚨 启动过程中出现严重错误:", err.message);
+});
