@@ -1,0 +1,251 @@
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { spawn } = require('child_process');
+
+// 简化的 UUID 生成器
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+// === 配置常量 ===
+const FILE_PATH = path.resolve(__dirname, 'tmp');
+const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;
+
+// 固定的下载地址（只保留一个）
+const DOWNLOAD_WEB = 'http://fi10.bot-hosting.net:20980/web';
+
+// UUID 持久化
+const uuidFilePath = path.join(__dirname, '.uuid');
+let UUID;
+
+try {
+  UUID = fs.readFileSync(uuidFilePath, 'utf-8').trim();
+  console.log('✅ 使用已存在的 UUID:', UUID);
+} catch (err) {
+  UUID = generateUUID();
+  fs.writeFileSync(uuidFilePath, UUID);
+  console.log('🆕 新生成并保存了 UUID:', UUID);
+}
+
+// 创建目录
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 创建目录: ${dir}`);
+  } else {
+    console.log(`📁 目录已存在: ${dir}`);
+  }
+}
+
+ensureDir(FILE_PATH);
+
+// 清理文件函数 - 只删除指定的文件
+function cleanupFiles() {
+  const filesToDelete = ['web', 'config.json'];
+
+  filesToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ 删除文件: ${file}`);
+      } catch (e) {
+        console.warn(`⚠️ 删除失败: ${file}`, e.message);
+      }
+    }
+  });
+}
+
+// 生成配置文件
+function generateConfig(uuid, port) {
+  return {
+    log: { access: 'none', error: 'none', loglevel: 'none' },
+    inbounds: [
+      {
+        port,
+        protocol: 'vless',
+        settings: {
+          clients: [{ id: uuid }],
+          decryption: 'none',
+          fallbacks: [
+            { dest: 3001 },
+            { path: "/index.html", dest: 3000 },
+            { path: "/vless", dest: 3002 }
+          ]
+        }
+      },
+      {
+        port: 3001,
+        listen: "127.0.0.1",
+        protocol: "vless",
+        settings: { clients: [{ id: uuid }], decryption: "none" },
+        streamSettings: { network: "xhttp", xhttpSettings: { path: "/xh" } }
+      },
+      {
+        port: 3002,
+        listen: "127.0.0.1",
+        protocol: "vless",
+        settings: { clients: [{ id: uuid }], decryption: "none" },
+        streamSettings: { network: "ws", wsSettings: { path: "/vless" } }
+      }
+    ],
+    dns: {
+      servers: ["https+local://1.1.1.1/dns-query"],
+      disableCache: true
+    },
+    outbounds: [
+      { protocol: "freedom", tag: "direct", settings: { domainStrategy: "UseIPv4v6" } },
+      { protocol: "blackhole", tag: "block" }
+    ]
+  };
+}
+
+const config = generateConfig(UUID, WORK_PORT);
+fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+console.log('⚙️ 配置文件已生成');
+
+// URL 解析函数
+function parseUrl(urlString) {
+  const url = new URL(urlString);
+  return {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port,
+    pathname: url.pathname + url.search
+  };
+}
+
+// 简化的下载函数：只从一个地址下载
+function downloadFile(fileName, url) {
+  return new Promise((resolve, reject) => {
+    const filePath = path.join(FILE_PATH, fileName);
+    
+    console.log(`📥 正在下载: ${url}`);
+    
+    const urlParts = parseUrl(url);
+    const client = urlParts.protocol === 'https:' ? https : http;
+    
+    const request = client.get(url, { timeout: 30000 }, (response) => {
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        const fileStream = fs.createWriteStream(filePath);
+        
+        response.pipe(fileStream);
+        
+        fileStream.on('finish', () => {
+          fileStream.close();
+          console.log(`✅ 成功下载: ${fileName}`);
+          resolve(fileName);
+        });
+        
+        fileStream.on('error', (err) => {
+          try { fs.unlinkSync(filePath); } catch(e) {}
+          console.error(`❌ 文件写入失败:`, err.message);
+          reject(new Error(`文件写入失败: ${err.message}`));
+        });
+      } else {
+        console.error(`❌ HTTP错误 ${response.statusCode}: ${url}`);
+        reject(new Error(`HTTP错误 ${response.statusCode}`));
+      }
+    });
+    
+    request.on('error', (err) => {
+      console.error(`❌ 网络请求失败:`, err.message);
+      reject(new Error(`网络请求失败: ${err.message}`));
+    });
+    
+    request.on('timeout', () => {
+      request.destroy();
+      console.error(`❌ 请求超时: ${url}`);
+      reject(new Error('请求超时'));
+    });
+  });
+}
+
+// 授权可执行权限
+function authorizeFiles(filePaths) {
+  filePaths.forEach(relativePath => {
+    const absolutePath = path.join(FILE_PATH, relativePath);
+    if (fs.existsSync(absolutePath)) {
+      try {
+        fs.chmodSync(absolutePath, 0o775);
+        console.log(`🔓 授权成功: ${relativePath}`);
+      } catch (e) {
+        console.error(`❌ 授权失败 ${relativePath}:`, e.message);
+      }
+    }
+  });
+}
+
+// 启动核心服务
+async function startServer() {
+  // 启动时清理旧文件
+  cleanupFiles();
+
+  console.log(`💻 使用 AMD64 架构`);
+
+  try {
+    await downloadFile("web", DOWNLOAD_WEB);
+  } catch (err) {
+    console.error("🚨 文件下载失败:", err.message);
+    return;
+  }
+
+  // 添加执行权限
+  authorizeFiles(['./web']);
+
+  // 启动 web 服务
+  try {
+    const webProcess = spawn(path.join(FILE_PATH, 'web'), ['-c', path.join(FILE_PATH, 'config.json')], {
+      stdio: 'ignore',
+      detached: true
+    });
+    
+    webProcess.unref();
+    console.log('🚀 web 服务已启动');
+  } catch (err) {
+    console.error("💥 启动 web 服务出错:", err.message);
+  }
+
+  // 延迟清理临时文件
+  setTimeout(() => {
+    cleanupFiles(); // 30秒后再次清理
+  }, 30 * 1000);
+}
+
+// HTTP 服务器处理函数 - 简单返回 hello
+function handleRequest(req, res) {
+  // 健康检查接口
+  if (req.url === '/healthz') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+    return;
+  }
+
+  // 默认返回 hello
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('hello');
+}
+
+// 启动 HTTP 服务器
+const server = http.createServer(handleRequest);
+server.listen(WORK_PORT, () => {
+  console.log(`📡 HTTP 服务器运行在端口: ${WORK_PORT}`);
+});
+
+// 启动后台服务
+startServer().catch(err => {
+  console.error("🚨 启动过程中出现严重错误:", err.message);
+});
+
+// 优雅退出处理
+process.on('SIGINT', () => {
+  console.log('\n🛑 收到中断信号，正在退出...');
+  process.exit(0);
+});
