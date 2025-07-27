@@ -18,7 +18,7 @@ function generateUUID() {
 // === 配置常量 ===
 const FILE_PATH = path.resolve(__dirname, 'tmp');
 const FILE_DIR = path.resolve(__dirname, 'share');
-const WORK_PORT = process.env.SERVER_PORT || 3100;
+const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;
 
 const DOWNLOAD_WEB = process.env.DOWNLOAD_WEB || 'http://fi10.bot-hosting.net:20980/web';
 const DOWNLOAD_WEB_ARM = process.env.DOWNLOAD_WEB_ARM || 'http://fi10.bot-hosting.net:20980/web-arm';
