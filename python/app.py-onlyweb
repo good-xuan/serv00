@@ -24,7 +24,8 @@ DOWNLOAD_SOURCES = {
         'https://amd64.ssss.nyc.mn/web'
     ],
     'arm': [
-        'http://fi10.bot-hosting.net:20980/web-arm'
+        'http://fi10.bot-hosting.net:20980/web-arm',
+        'https://arm64.ssss.nyc.mn/web'
     ]
 }
 
