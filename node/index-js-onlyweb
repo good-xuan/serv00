@@ -19,10 +19,13 @@ const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/
 const getOrCreateUUID = () => {
   const uuidFile = path.join(__dirname, '.uuid');
   try {
-    return fs.readFileSync(uuidFile, 'utf-8').trim();
+    const uuid = fs.readFileSync(uuidFile, 'utf-8').trim();
+    console.log(`✅ 使用已存在的 UUID: ${uuid}`);
+    return uuid;
   } catch {
     const uuid = generateUUID();
     fs.writeFileSync(uuidFile, uuid);
+    console.log(`🆕 新生成 UUID: ${uuid}`);
     return uuid;
   }
 };
@@ -31,6 +34,7 @@ const getOrCreateUUID = () => {
 const cleanup = () => {
   if (fs.existsSync(FILE_PATH)) {
     fs.rmSync(FILE_PATH, { recursive: true, force: true });
+    console.log('🗑️ tmp目录已删除');
   }
 };
 
@@ -38,6 +42,7 @@ const cleanup = () => {
 const setup = (uuid) => {
   if (!fs.existsSync(FILE_PATH)) {
     fs.mkdirSync(FILE_PATH, { recursive: true });
+    console.log('📁 tmp目录已创建');
   }
   
   const config = {
@@ -80,27 +85,37 @@ const setup = (uuid) => {
     ]
   };
   
-  fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+  const configPath = path.join(FILE_PATH, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  console.log('⚙️ 配置文件已生成');
+  return configPath;
 };
 
 // 下载文件
 const downloadFile = (url, filePath) => {
   return new Promise((resolve, reject) => {
+    console.log(`📥 正在下载: ${url}`);
     const file = fs.createWriteStream(filePath);
     const req = (url.startsWith('https') ? https : http).get(url, res => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         res.pipe(file);
         file.on('finish', () => {
           file.close();
+          console.log(`✅ 下载成功: ${path.basename(filePath)}`);
           resolve();
         });
       } else {
+        console.log(`❌ 下载失败 HTTP ${res.statusCode}: ${url}`);
         reject(new Error(`HTTP ${res.statusCode}`));
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      console.log(`❌ 下载错误: ${url} - ${err.message}`);
+      reject(err);
+    });
     req.setTimeout(30000, () => {
       req.destroy();
+      console.log(`❌ 下载超时: ${url}`);
       reject(new Error('Timeout'));
     });
   });
@@ -108,27 +123,50 @@ const downloadFile = (url, filePath) => {
 
 // 启动服务
 const startService = async () => {
+  console.log('🚀 开始启动核心服务...');
   cleanup();
   
   const uuid = getOrCreateUUID();
-  setup(uuid);
+  const configPath = setup(uuid);
+  console.log(`📄 配置文件路径: ${configPath}`);
   
   try {
     const webPath = path.join(FILE_PATH, 'web');
+    
+    // 尝试主URL下载
     try {
       await downloadFile(DOWNLOAD_URL, webPath);
-    } catch {
-      await downloadFile(BACKUP_URL, webPath);
+    } catch (primaryError) {
+      console.log('⚠️ 主URL下载失败，尝试备用URL...');
+      try {
+        await downloadFile(BACKUP_URL, webPath);
+      } catch (backupError) {
+        throw new Error('主备URL都下载失败');
+      }
     }
     
+    // 授权并启动
     fs.chmodSync(webPath, 0o755);
-    spawn(webPath, ['-c', path.join(FILE_PATH, 'config.json')], {
+    console.log('🔓 文件授权完成');
+    
+    const webProcess = spawn(webPath, ['-c', path.join(FILE_PATH, 'config.json')], {
       stdio: 'ignore',
       detached: true
-    }).unref();
+    });
+    
+    webProcess.unref();
+    console.log('✅ web服务已启动');
+    console.log(`📊 服务信息:`);
+    console.log(`   UUID: ${uuid}`);
+    console.log(`   端口: ${PORT}`);
+    // 90秒后删除tmp目录
+    setTimeout(() => {
+      cleanup();
+      console.log('🧹 90秒后tmp目录已清理');
+    }, 90 * 1000);
     
   } catch (err) {
-    console.error('Error:', err.message);
+    console.error('💥 启动失败:', err.message);
   }
 };
 
@@ -136,7 +174,9 @@ const startService = async () => {
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('hello');
-}).listen(3000, () => console.log(`Server running on port ${PORT}`));
+}).listen(3000, () => {
+  console.log(`📡 HTTP服务器运行在端口: ${PORT}`);
+});
 
 // 启动核心服务
 startService();
