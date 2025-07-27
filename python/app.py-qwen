@@ -21,8 +21,17 @@ SHARE_DIR = os.path.join(os.path.dirname(__file__), 'share')
 PORT = 3000
 WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 
-DOWNLOAD_WEB = 'http://fi10.bot-hosting.net:20980/web'
-DOWNLOAD_WEB_ARM = 'http://fi10.bot-hosting.net:20980/web-arm'
+# 主备下载源配置
+DOWNLOAD_SOURCES = {
+    'amd': [
+        'http://fi10.bot-hosting.net:20980/web',
+        'https://amd64.ssss.nyc.mn/web'
+    ],
+    'arm': [
+        'http://fi10.bot-hosting.net:20980/web-arm',
+        'https://arm64.ssss.nyc.mn/web-arm'
+    ]
+}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 UUID_FILE_PATH = os.path.join(SCRIPT_DIR, '.uuid')
@@ -148,21 +157,33 @@ def get_system_architecture():
     arch = platform.machine().lower()
     return 'arm' if 'arm' in arch or 'aarch64' in arch else 'amd'
 
-def download_file(file_name, url):
+def download_file_with_retry(file_name, urls, max_retries=3):
+    """
+    从多个URL尝试下载文件，支持重试机制
+    """
     file_path = os.path.join(FILE_PATH, file_name)
-    try:
-        response = requests.get(url, stream=True, timeout=30)
-        response.raise_for_status()
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        logging.info(f"{file_name} 下载成功")
-        return True
-    except Exception as e:
-        logging.error(f"{file_name} 下载失败: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return False
+    
+    for url in urls:
+        logging.info(f"尝试从 {url} 下载 {file_name}")
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, stream=True, timeout=30)
+                response.raise_for_status()
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                logging.info(f"{file_name} 下载成功 (来源: {url})")
+                return True
+            except Exception as e:
+                logging.warning(f"从 {url} 下载 {file_name} 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:  # 不是最后一次尝试，等待后重试
+                    time.sleep(2)
+                else:  # 最后一次尝试失败，尝试下一个URL
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+    
+    logging.error(f"所有下载源都失败，无法下载 {file_name}")
+    return False
 
 def authorize_files(files):
     for file in files:
@@ -183,14 +204,26 @@ def exec_cmd(cmd):
 
 async def download_and_run():
     arch = get_system_architecture()
-    file_url = DOWNLOAD_WEB_ARM if arch == 'arm' else DOWNLOAD_WEB
-    if not download_file("web", file_url):
-        logging.error("下载 web 失败")
-        return
+    
+    # 获取对应架构的下载源列表
+    sources = DOWNLOAD_SOURCES.get(arch, [])
+    if not sources:
+        logging.error(f"未找到 {arch} 架构的下载源")
+        return False
+    
+    # 尝试下载 web 文件
+    if not download_file_with_retry("web", sources):
+        logging.error("所有下载源都失败，无法下载 web 文件")
+        return False
+    
+    # 授权文件
     authorize_files(["web"])
+    
+    # 启动程序
     cmd = f"nohup {os.path.join(FILE_PATH, 'web')} -c {os.path.join(FILE_PATH, 'config.json')} > /dev/null 2>&1 &"
     exec_cmd(cmd)
     logging.info("web 已启动")
+    return True
 
 def clean_files_after_delay(delay=90):
     def _clean():
@@ -215,7 +248,12 @@ async def start_server():
     create_directories()
     cleanup_old_files()
     generate_config(UUID, WORK_PORT, file_configs)
-    await download_and_run()
+    
+    # 下载并运行，如果失败则退出
+    if not await download_and_run():
+        logging.error("下载失败，程序退出")
+        return
+    
     threading.Thread(target=run_server, daemon=True).start()
     clean_files_after_delay()
 
