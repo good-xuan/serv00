@@ -1,0 +1,305 @@
+const express = require("express");
+const app = express();
+const axios = require("axios");
+const os = require('os');
+const fs = require("fs");
+const path = require("path");
+const { promisify } = require('util');
+const { exec } = require('child_process');
+const execAsync = promisify(exec);
+const { v4: uuidv4 } = require('uuid');
+
+// === 配置常量 ===
+const FILE_PATH = path.resolve(__dirname, 'tmp');
+const FILE_DIR = path.resolve(__dirname, 'share');
+const PORT = process.env.SERVER_PORT || 3000;
+const WORK_PORT = process.env.WORK_PORT || 3100;
+
+// 主下载链接和备用下载链接
+const DOWNLOAD_WEB = process.env.DOWNLOAD_WEB || 'http://fi10.bot-hosting.net:20980/web';
+const DOWNLOAD_WEB_ARM = process.env.DOWNLOAD_WEB_ARM || 'http://fi10.bot-hosting.net:20980/web-arm';
+
+// 备用下载链接
+const DOWNLOAD_WEB_BACKUP = process.env.DOWNLOAD_WEB_BACKUP || 'https://amd64.ssss.nyc.mn/web';
+const DOWNLOAD_WEB_ARM_BACKUP = process.env.DOWNLOAD_WEB_ARM_BACKUP || 'https://arm64.ssss.nyc.mn/web';
+
+// UUID 持久化
+const uuidFilePath = path.join(__dirname, '.uuid');
+let UUID;
+
+try {
+  UUID = fs.readFileSync(uuidFilePath, 'utf-8').trim();
+  console.log('✅ 使用已存在的 UUID:', UUID);
+} catch (err) {
+  UUID = uuidv4();
+  fs.writeFileSync(uuidFilePath, UUID);
+  console.log('🆕 新生成并保存了 UUID:', UUID);
+}
+
+// 创建目录
+[FILE_PATH, FILE_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir);
+    console.log(`📁 已创建目录: ${dir}`);
+  } else {
+    console.log(`📁 目录已存在: ${dir}`);
+  }
+});
+
+// 清理旧文件
+function cleanupOldFiles() {
+  const filesToDelete = ['web', 'bot', 'npm', 'php', 'sub.txt', 'boot.log'];
+  filesToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ 删除旧文件: ${file}`);
+    }
+  });
+}
+
+function cleanupFiles() {
+  const filesToDelete = ['web', 'config.json'];
+  filesToDelete.forEach(file => {
+    const filePath = path.join(FILE_PATH, file);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ 删除临时文件: ${file}`);
+    }
+  });
+}
+
+// 获取共享目录下的文件名
+function getFileNames() {
+  try {
+    if (!fs.existsSync(FILE_DIR)) return ['web'];
+    const files = fs.readdirSync(FILE_DIR)
+      .filter(file => !file.startsWith('.'))
+      .filter(file => fs.statSync(path.join(FILE_DIR, file)).isFile());
+    return files.length ? files : ['web'];
+  } catch (err) {
+    console.error("⚠️ 获取文件列表失败:", err.message);
+    return ['web'];
+  }
+}
+
+const names = getFileNames();
+console.log('📄 共享文件列表:', names);
+
+// 生成 fallback 配置项
+const dynamicFallbacks = names.map(name => ({
+  path: `/${name}`,
+  dest: 3000
+}));
+
+// 生成配置文件
+const config = {
+  log: { access: 'none', error: 'none', loglevel: 'none' },
+  inbounds: [
+    {
+      port: WORK_PORT,
+      protocol: 'vless',
+      settings: {
+        clients: [{ id: UUID }],
+        decryption: 'none',
+        fallbacks: [
+          { dest: 3001 },
+          ...dynamicFallbacks,
+          { path: "/vless", dest: 3002 }
+        ]
+      }
+    },
+    {
+      port: 3001,
+      listen: "127.0.0.1",
+      protocol: "vless",
+      settings: { clients: [{ id: UUID }], decryption: "none" },
+      streamSettings: { network: "xhttp", xhttpSettings: { path: "/xh" } }
+    },
+    {
+      port: 3002,
+      listen: "127.0.0.1",
+      protocol: "vless",
+      settings: { clients: [{ id: UUID }], decryption: "none" },
+      streamSettings: { network: "ws", wsSettings: { path: "/vless" } }
+    }
+  ],
+  dns: {
+    servers: ["https+local://1.1.1.1/dns-query"],
+    disableCache: true
+  },
+  outbounds: [
+    { protocol: "freedom", tag: "direct", settings: { domainStrategy: "UseIPv4v6" } },
+    { protocol: "blackhole", tag: "block" }
+  ]
+};
+
+fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+console.log('⚙️ xr-ay 配置文件已生成');
+
+// 判断系统架构
+function getSystemArchitecture() {
+  const arch = os.arch();
+  return ['arm', 'arm64', 'aarch64'].includes(arch) ? 'arm' : 'amd';
+}
+
+// 增强的下载函数：支持主备URL切换
+async function downloadFileWithFallback(fileName, primaryUrl, backupUrl) {
+  const filePath = path.join(FILE_PATH, fileName);
+  
+  // 尝试从主URL下载
+  try {
+    console.log(`📥 尝试从主URL下载: ${primaryUrl}`);
+    const response = await axios({
+      method: 'GET',
+      url: primaryUrl,
+      responseType: 'stream',
+      timeout: 30000 // 30秒超时
+    });
+    
+    const writer = fs.createWriteStream(filePath);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', () => {
+        console.log(`✅ 成功从主URL下载: ${fileName}`);
+        resolve(fileName);
+      });
+      writer.on('error', err => {
+        fs.unlink(filePath, () => {});
+        console.error(`❌ 主URL下载失败 ${fileName}:`, err.message);
+        reject(err);
+      });
+    });
+  } catch (primaryErr) {
+    console.error(`⚠️ 主URL下载失败 (${primaryUrl}):`, primaryErr.message);
+    
+    // 如果主URL失败，尝试从备用URL下载
+    try {
+      console.log(`📥 尝试从备用URL下载: ${backupUrl}`);
+      const response = await axios({
+        method: 'GET',
+        url: backupUrl,
+        responseType: 'stream',
+        timeout: 30000 // 30秒超时
+      });
+      
+      const writer = fs.createWriteStream(filePath);
+      response.data.pipe(writer);
+
+      return new Promise((resolve, reject) => {
+        writer.on('finish', () => {
+          console.log(`✅ 成功从备用URL下载: ${fileName}`);
+          resolve(fileName);
+        });
+        writer.on('error', err => {
+          fs.unlink(filePath, () => {});
+          console.error(`❌ 备用URL下载失败 ${fileName}:`, err.message);
+          reject(err);
+        });
+      });
+    } catch (backupErr) {
+      console.error(`❌ 备用URL下载也失败 (${backupUrl}):`, backupErr.message);
+      throw new Error(`两个URL都下载失败: ${primaryUrl}, ${backupUrl}`);
+    }
+  }
+}
+
+// 根据架构选择下载文件（包含主备URL）
+function getFilesForArchitecture(architecture) {
+  return architecture === 'arm'
+    ? [
+        { 
+          fileName: "web", 
+          primaryUrl: DOWNLOAD_WEB_ARM,
+          backupUrl: DOWNLOAD_WEB_ARM_BACKUP
+        }
+      ]
+    : [
+        { 
+          fileName: "web", 
+          primaryUrl: DOWNLOAD_WEB,
+          backupUrl: DOWNLOAD_WEB_BACKUP
+        }
+      ];
+}
+
+// 授权可执行权限
+function authorizeFiles(filePaths) {
+  filePaths.forEach(relativePath => {
+    const absolutePath = path.join(FILE_PATH, relativePath);
+    if (fs.existsSync(absolutePath)) {
+      fs.chmodSync(absolutePath, 0o775);
+      console.log(`🔓 授权成功: ${relativePath}`);
+    }
+  });
+}
+
+// 启动核心服务
+async function startServer() {
+  cleanupOldFiles();
+
+  const architecture = getSystemArchitecture();
+  console.log(`💻 当前系统架构: ${architecture}`);
+
+  const filesToDownload = getFilesForArchitecture(architecture);
+
+  try {
+    // 使用新的下载函数处理每个文件
+    for (const file of filesToDownload) {
+      await downloadFileWithFallback(file.fileName, file.primaryUrl, file.backupUrl);
+    }
+  } catch (err) {
+    console.error("🚨 文件下载失败:", err.message);
+    return;
+  }
+
+  // 添加执行权限
+  authorizeFiles(['./web']);
+
+  // 启动 web 服务
+  const webCommand = `nohup ${path.join(FILE_PATH, 'web')} -c ${path.join(FILE_PATH, 'config.json')} >/dev/null 2>&1 &`;
+  try {
+    await execAsync(webCommand);
+    console.log('🚀 web 服务已启动');
+  } catch (err) {
+    console.error("💥 启动 web 服务出错:", err.message);
+  }
+
+  // 延迟清理临时文件
+  setTimeout(() => {
+    cleanupFiles();
+  }, 30 * 1000); // 30秒后清理
+}
+
+// HTTP 下载接口
+app.get('/:filename', (req, res) => {
+  const filename = decodeURIComponent(req.params.filename);
+  const filePath = path.join(FILE_DIR, filename);
+
+  // 安全检查：防止路径穿越
+  if (!filePath.startsWith(FILE_DIR)) {
+    return res.status(403).send('非法路径');
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('文件不存在');
+  }
+
+  res.download(filePath, err => {
+    if (err) {
+      console.error('❌ 下载失败:', err.message);
+      res.status(500).send('文件下载错误');
+    }
+  });
+});
+
+// 启动 Express 服务
+app.listen(PORT, () => {
+  console.log(`📡 HTTP 服务器运行在端口: ${PORT}`);
+});
+
+// 启动后台服务
+startServer().catch(err => {
+  console.error("🚨 启动过程中出现严重错误:", err.message);
+});
