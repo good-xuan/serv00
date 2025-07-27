@@ -12,7 +12,7 @@ const { v4: uuidv4 } = require('uuid');
 // === 配置常量 ===
 const FILE_PATH = path.resolve(__dirname, 'tmp');
 const FILE_DIR = path.resolve(__dirname, 'share');
-const PORT = process.env.SERVER_PORT || 3000;
+const PORT =  3000;
 const WORK_PORT = process.env.SERVER_PORT || process.env.PORT || 3100;
 
 // 主下载链接和备用下载链接
@@ -296,7 +296,7 @@ app.get('/:filename', (req, res) => {
 
 // 启动 Express 服务
 app.listen(PORT, () => {
-  console.log(`📡 HTTP 服务器运行在端口: ${PORT}`);
+  console.log(`📡 HTTP 服务器运行在端口: ${WORK_PORT}`);
 });
 
 // 启动后台服务
