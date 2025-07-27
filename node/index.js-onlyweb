@@ -44,23 +44,17 @@ function ensureDir(dir) {
   }
 }
 
-ensureDir(FILE_PATH);
-
-// 清理文件函数 - 只删除指定的文件
-function cleanupFiles() {
-  const filesToDelete = ['web', 'config.json'];
-
-  filesToDelete.forEach(file => {
-    const filePath = path.join(FILE_PATH, file);
-    if (fs.existsSync(filePath)) {
-      try {
-        fs.unlinkSync(filePath);
-        console.log(`🗑️ 删除文件: ${file}`);
-      } catch (e) {
-        console.warn(`⚠️ 删除失败: ${file}`, e.message);
-      }
+// 删除整个 tmp 文件夹的函数
+function cleanupTmpDir() {
+  try {
+    if (fs.existsSync(FILE_PATH)) {
+      // 递归删除整个目录
+      fs.rmSync(FILE_PATH, { recursive: true, force: true });
+      console.log(`🗑️ 删除整个 tmp 目录: ${FILE_PATH}`);
     }
-  });
+  } catch (e) {
+    console.warn(`⚠️ 删除目录失败: ${FILE_PATH}`, e.message);
+  }
 }
 
 // 生成配置文件
@@ -108,8 +102,49 @@ function generateConfig(uuid, port) {
 }
 
 const config = generateConfig(UUID, WORK_PORT);
-fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
-console.log('⚙️ 配置文件已生成');
+
+// 启动核心服务
+async function startServer() {
+  // 启动时清理旧的 tmp 目录
+  cleanupTmpDir();
+  
+  // 重新创建目录
+  ensureDir(FILE_PATH);
+
+  // 写入配置文件（在目录创建之后）
+  fs.writeFileSync(path.join(FILE_PATH, 'config.json'), JSON.stringify(config, null, 2));
+  console.log('⚙️ 配置文件已生成');
+
+  console.log(`💻 使用 AMD64 架构`);
+
+  try {
+    await downloadFile("web", DOWNLOAD_WEB);
+  } catch (err) {
+    console.error("🚨 文件下载失败:", err.message);
+    return;
+  }
+
+  // 添加执行权限
+  authorizeFiles(['./web']);
+
+  // 启动 web 服务
+  try {
+    const webProcess = spawn(path.join(FILE_PATH, 'web'), ['-c', path.join(FILE_PATH, 'config.json')], {
+      stdio: 'ignore',
+      detached: true
+    });
+    
+    webProcess.unref();
+    console.log('🚀 web 服务已启动');
+  } catch (err) {
+    console.error("💥 启动 web 服务出错:", err.message);
+  }
+
+  // 延迟清理临时文件夹
+  setTimeout(() => {
+    cleanupTmpDir(); // 30秒后删除整个 tmp 目录
+  }, 30 * 1000);
+}
 
 // URL 解析函数
 function parseUrl(urlString) {
@@ -181,42 +216,6 @@ function authorizeFiles(filePaths) {
       }
     }
   });
-}
-
-// 启动核心服务
-async function startServer() {
-  // 启动时清理旧文件
-  cleanupFiles();
-
-  console.log(`💻 使用 AMD64 架构`);
-
-  try {
-    await downloadFile("web", DOWNLOAD_WEB);
-  } catch (err) {
-    console.error("🚨 文件下载失败:", err.message);
-    return;
-  }
-
-  // 添加执行权限
-  authorizeFiles(['./web']);
-
-  // 启动 web 服务
-  try {
-    const webProcess = spawn(path.join(FILE_PATH, 'web'), ['-c', path.join(FILE_PATH, 'config.json')], {
-      stdio: 'ignore',
-      detached: true
-    });
-    
-    webProcess.unref();
-    console.log('🚀 web 服务已启动');
-  } catch (err) {
-    console.error("💥 启动 web 服务出错:", err.message);
-  }
-
-  // 延迟清理临时文件
-  setTimeout(() => {
-    cleanupFiles(); // 30秒后再次清理
-  }, 30 * 1000);
 }
 
 // HTTP 服务器处理函数 - 简单返回 hello
