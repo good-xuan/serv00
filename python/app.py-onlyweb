@@ -10,33 +10,26 @@ import platform
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import unquote
 import logging
 import ssl
 
-# 初始化日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-# === 环境变量 ===
 FILE_PATH = os.environ.get('FILE_PATH', './.cache')
 WORK_PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or 9999)
 
-# 主备下载源配置（使用标准库 urllib）
 DOWNLOAD_SOURCES = {
     'amd': [
         'http://fi10.bot-hosting.net:20980/web',
         'https://amd64.ssss.nyc.mn/web'
     ],
     'arm': [
-        'http://fi10.bot-hosting.net:20980/web-arm',
-        'https://arm64.ssss.nyc.mn/web'
+        'http://fi10.bot-hosting.net:20980/web-arm'
     ]
 }
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 UUID_FILE_PATH = os.path.join(SCRIPT_DIR, '.uuid')
-
-# === 工具方法 ===
 
 def get_or_generate_uuid():
     if os.path.exists(UUID_FILE_PATH):
@@ -72,6 +65,10 @@ def cleanup_old_files():
             logging.warning(f"删除失败 {name}: {e}")
 
 def generate_config(uuid_str, work_port):
+    FALLBACK_SERVER_PORT = 3000
+    XHTTP_PORT = 3001
+    WS_PORT = 3002
+
     config = {
         "log": {"access": "none", "error": "none", "loglevel": "none"},
         "dns": {"servers": ["https+local://1.1.1.1/dns-query"], "disableCache": True},
@@ -83,21 +80,21 @@ def generate_config(uuid_str, work_port):
                     "clients": [{"id": uuid_str}],
                     "decryption": "none",
                     "fallbacks": [
-                        {"dest": 3001},
-                        {"path": "/vless", "dest": 3002},
-                        {"path": "/index.html", "dest": 3000}
+                        {"dest": XHTTP_PORT},
+                        {"path": "/vless", "dest": WS_PORT},
+                        {"path": "/index.html", "dest": FALLBACK_SERVER_PORT}
                     ]
                 }
             },
             {
-                "port": 3001,
+                "port": XHTTP_PORT,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
                 "settings": {"clients": [{"id": uuid_str}], "decryption": "none"},
                 "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/xh"}}
             },
             {
-                "port": 3002,
+                "port": WS_PORT,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
                 "settings": {"clients": [{"id": uuid_str}], "decryption": "none"},
@@ -119,19 +116,16 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
         self.wfile.write(b"hello")
-        return
+        logging.debug(f"处理请求: {self.path}")
 
     def log_message(self, *args):
-        pass  # 屏蔽默认输出
+        pass
 
 def get_system_architecture():
     arch = platform.machine().lower()
     return 'arm' if 'arm' in arch or 'aarch64' in arch else 'amd'
 
 def download_file_standard(url, file_path, timeout=30):
-    """
-    使用标准库 urllib 下载文件
-    """
     try:
         req = urllib.request.Request(
             url,
@@ -157,27 +151,30 @@ def download_file_standard(url, file_path, timeout=30):
         return False
 
 def download_file_with_retry(file_name, urls, max_retries=3):
-    """
-    从多个URL尝试下载文件，支持重试机制（使用标准库）
-    """
     file_path = os.path.join(FILE_PATH, file_name)
 
     for url in urls:
-        logging.info(f"尝试从 {url} 下载 {file_name}")
+        clean_url = url.strip()
+        if not clean_url:
+            continue
+        logging.info(f"尝试从 {clean_url} 下载 {file_name}")
         for attempt in range(max_retries):
             try:
-                if download_file_standard(url, file_path):
-                    logging.info(f"{file_name} 下载成功 (来源: {url})")
+                if download_file_standard(clean_url, file_path):
+                    logging.info(f"{file_name} 下载成功 (来源: {clean_url})")
                     return True
                 else:
                     raise Exception("下载函数返回失败")
             except Exception as e:
-                logging.warning(f"从 {url} 下载 {file_name} 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                logging.warning(f"从 {clean_url} 下载 {file_name} 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     time.sleep(2)
                 else:
                     if os.path.exists(file_path):
-                        os.remove(file_path)
+                        try:
+                            os.remove(file_path)
+                        except OSError as remove_err:
+                            logging.warning(f"下载失败后无法删除临时文件 {file_path}: {remove_err}")
 
     logging.error(f"所有下载源都失败，无法下载 {file_name}")
     return False
@@ -193,11 +190,18 @@ def authorize_files(files):
 
 def exec_cmd(cmd):
     try:
-        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        return result.stdout + result.stderr
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            text=True
+        )
+        return process
     except Exception as e:
         logging.error(f"执行命令失败: {e}")
-        return ""
+        return None
 
 async def download_and_run():
     arch = get_system_architecture()
@@ -213,8 +217,14 @@ async def download_and_run():
 
     authorize_files(["web"])
 
-    cmd = f"nohup {os.path.join(FILE_PATH, 'web')} -c {os.path.join(FILE_PATH, 'config.json')} > /dev/null 2>&1 &"
-    exec_cmd(cmd)
+    cmd = f"{os.path.join(FILE_PATH, 'web')} -c {os.path.join(FILE_PATH, 'config.json')}"
+    loop = asyncio.get_running_loop()
+    process = await loop.run_in_executor(None, exec_cmd, cmd)
+    
+    if process is None:
+        logging.error("启动 web 进程失败")
+        return False
+        
     logging.info("web 已启动")
     return True
 
@@ -243,18 +253,23 @@ async def start_server():
     generate_config(UUID, WORK_PORT)
 
     if not await download_and_run():
-        logging.error("下载失败，程序退出")
-        return
+        logging.error("下载或启动失败，程序退出")
+        return False
 
     threading.Thread(target=run_server, daemon=True).start()
     clean_files_after_delay()
+    return True
 
-def run_async():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_server())
-    while True:
-        time.sleep(3600)
+async def main():
+    success = await start_server()
+    if not success:
+        return
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except KeyboardInterrupt:
+        logging.info("收到中断信号，正在退出...")
 
 if __name__ == "__main__":
-    run_async()
+    asyncio.run(main())
