@@ -25,13 +25,13 @@ DOWNLOAD_URLS = [
 # --- Cloudflare 控制常量 ---
 ENABLE_CLOUDFLARE = 'n' # 'y' 或 'yes' 才启用CF
 CLOUDFLARE_PORT='5111'
+# --- Cloudflare 隧道密钥配置 ---
+CF_TUNNEL_TOKEN = ''  # 隧道令牌
 
 # --- Cloudflare Argo 配置 ---
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 TUNNEL_DURATION = 90  # 90秒后删除目录
 
-# --- Cloudflare 隧道密钥配置 ---
-CF_TUNNEL_TOKEN = ''  # 隧道令牌
 
 # --- 全局变量 ---
 cloudflared_process = None
