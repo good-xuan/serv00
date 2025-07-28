@@ -31,7 +31,7 @@ CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/dow
 TUNNEL_DURATION = 90  # 90秒后删除目录
 
 # --- Cloudflare 隧道密钥配置 ---
-CF_TUNNEL_TOKEN = 'eyJhIjoiNDg2ZmQ0NmRmYWJlMzQ3YmY0YWM0MDk0MGExODE1ZDkiLCJ0IjoiMjA1YTI2N2YtMmNiMy00Y2ZjLWI2NmMtYjVmZTQyOTQ0NjUzIiwicyI6Ik1qa3laakEyWldNdE5UWTFPUzAwTWpJNUxUZ3pZalV0TkRnd1lXTmxOR1l6WkRreiJ9'  # 隧道令牌
+CF_TUNNEL_TOKEN = ''  # 隧道令牌
 
 # --- 全局变量 ---
 cloudflared_process = None
