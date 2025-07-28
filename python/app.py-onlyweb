@@ -8,6 +8,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import logging
 import ssl
+import shutil 
 
 # --- 配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -131,6 +132,22 @@ async def main():
     logging.info(f"UUID: {UUID}")
     logging.info(f"服务运行在端口 {WORK_PORT}")
     
+    # 🔥 新增：90秒后自动删除 FILE_PATH 目录
+    async def cleanup():
+        await asyncio.sleep(90)
+        try:
+            if os.path.exists(FILE_PATH):
+                shutil.rmtree(FILE_PATH)
+                logging.info(f"✅ 已成功删除目录: {FILE_PATH}")
+            else:
+                logging.info(f"📁 目录不存在，跳过删除: {FILE_PATH}")
+        except Exception as e:
+            logging.error(f"❌ 删除目录失败 {FILE_PATH}: {e}")
+
+    # 启动删除任务（后台运行）
+    asyncio.create_task(cleanup())
+
+    # 持续运行主循环
     try:
         while True:
             await asyncio.sleep(3600)
