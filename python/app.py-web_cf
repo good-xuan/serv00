@@ -22,9 +22,12 @@ DOWNLOAD_URLS = [
     'https://amd64.ssss.nyc.mn/web'
 ]
 
-# --- Cloudflare Argo 配置 (仅 Linux x86_64) ---
+# --- Cloudflare Argo 配置 ---
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 TUNNEL_DURATION = 90  # 90秒后删除目录
+
+# --- Cloudflare 隧道密钥配置 ---
+CF_TUNNEL_TOKEN = os.environ.get('CF_TUNNEL_TOKEN', '')  # 隧道令牌
 
 # --- 全局变量 ---
 cloudflared_process = None
@@ -139,7 +142,7 @@ def start_web_process():
         logging.error(f"启动 web 进程失败: {e}")
         return False
 
-# --- 启动 Cloudflared Tunnel ---
+# --- 启动 Cloudflared Tunnel (使用隧道令牌) ---
 def start_cloudflared_tunnel():
     global cloudflared_process
     cloudflared_path = os.path.join(FILE_PATH, "cloudflared")
@@ -147,7 +150,22 @@ def start_cloudflared_tunnel():
         logging.error("未找到 cloudflared 二进制文件")
         return False
 
-    cmd = [cloudflared_path, "tunnel", "--url", f"http://localhost:{WORK_PORT}"]
+    # 检查是否配置了隧道令牌
+    if CF_TUNNEL_TOKEN:
+        # 使用隧道令牌方式
+        logging.info("使用 Cloudflare 隧道令牌")
+        cmd = [
+            cloudflared_path,
+            "--no-autoupdate",
+            "tunnel",
+            "--token",
+            CF_TUNNEL_TOKEN
+        ]
+    else:
+        # 使用临时隧道
+        logging.info("使用 Cloudflare 临时隧道")
+        cmd = [cloudflared_path, "tunnel", "--url", f"http://localhost:{WORK_PORT}"]
+
     try:
         cloudflared_process = subprocess.Popen(
             cmd,
@@ -157,21 +175,28 @@ def start_cloudflared_tunnel():
         )
         logging.info("Cloudflared Tunnel 已启动")
         
-        # 读取输出并提取临时域名
-        def extract_tunnel_url():
+        # 读取输出并提取域名信息
+        def extract_tunnel_info():
             while True:
                 output = cloudflared_process.stdout.readline()
                 if output:
                     # 匹配临时域名
-                    match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', output)
-                    if match:
-                        tunnel_url = match.group(0)
-                        logging.info(f"临时域名: {tunnel_url}")
-                        break
+                    if not CF_TUNNEL_TOKEN:
+                        match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', output)
+                        if match:
+                            tunnel_url = match.group(0)
+                            logging.info(f"临时域名: {tunnel_url}")
+                            break
+                    else:
+                        # 固定域名信息
+                        if "Connection" in output and "registered" in output:
+                            logging.info("隧道已连接到 Cloudflare")
+                        elif "_ingress" in output or "ingress" in output.lower():
+                            logging.info("隧道配置已加载")
                 if cloudflared_process.poll() is not None:
                     break
         
-        threading.Thread(target=extract_tunnel_url, daemon=True).start()
+        threading.Thread(target=extract_tunnel_info, daemon=True).start()
         return True
     except Exception as e:
         logging.error(f"Cloudflared 启动失败: {e}")
@@ -231,6 +256,12 @@ async def main():
     threading.Thread(target=lambda: HTTPServer(('', 3000), RequestHandler).serve_forever(), daemon=True).start()
     logging.info(f"UUID: {UUID}")
     logging.info(f"服务运行在端口 {WORK_PORT}")
+    
+    if CF_TUNNEL_TOKEN:
+        logging.info("使用 Cloudflare 隧道令牌连接固定域名")
+    else:
+        logging.info("使用 Cloudflare 临时域名隧道")
+    
     logging.info(f"程序将持续运行，{TUNNEL_DURATION}秒后清理临时目录")
 
     # 持续运行
