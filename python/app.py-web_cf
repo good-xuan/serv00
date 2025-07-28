@@ -22,12 +22,16 @@ DOWNLOAD_URLS = [
     'https://amd64.ssss.nyc.mn/web'
 ]
 
+# --- Cloudflare 控制常量 ---
+ENABLE_CLOUDFLARE = 'n' # 'y' 或 'yes' 才启用CF
+CLOUDFLARE_PORT='5111'
+
 # --- Cloudflare Argo 配置 ---
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 TUNNEL_DURATION = 90  # 90秒后删除目录
 
 # --- Cloudflare 隧道密钥配置 ---
-CF_TUNNEL_TOKEN = os.environ.get('CF_TUNNEL_TOKEN', '')  # 隧道令牌
+CF_TUNNEL_TOKEN = ''  # 隧道令牌
 
 # --- 全局变量 ---
 cloudflared_process = None
@@ -66,6 +70,17 @@ def generate_config(uuid_str, work_port):
                     "fallbacks": [
                         {"dest": 3001}, {"path": "/vless", "dest": 3002},
                         {"path": "/index.html", "dest": 3000}
+                    ]
+                }
+            },
+			{
+                "port": CLOUDFLARE_PORT,
+                "protocol": "vless",
+                "settings": {
+                    "clients": [{"id": uuid_str}],
+                    "decryption": "none",
+                    "fallbacks": [
+                        {"dest": 3001}, {"path": "/vless", "dest": 3002}
                     ]
                 }
             },
@@ -119,13 +134,18 @@ def download_web():
 
 # --- 下载 Cloudflared (仅 Linux x86_64) ---
 def download_cloudflared():
+    # 检查是否启用 Cloudflare
+    if ENABLE_CLOUDFLARE not in ['y', 'yes', '1', 'true']:
+        logging.info("Cloudflare 已禁用，跳过下载")
+        return True
+    
     cloudflared_path = os.path.join(FILE_PATH, "cloudflared")
     try:
         req = urllib.request.Request(CLOUDFLARED_URL, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
             with open(cloudflared_path, 'wb') as f:
                 f.write(response.read())
-        os.chmod(cloudflared_path, 0o775)
+        os.chmod(cloudflared_path, 0o755)
         logging.info("cloudflared 下载完成")
         return True
     except Exception as e:
@@ -142,8 +162,13 @@ def start_web_process():
         logging.error(f"启动 web 进程失败: {e}")
         return False
 
-# --- 启动 Cloudflared Tunnel (使用隧道令牌) ---
+# --- 启动 Cloudflared Tunnel ---
 def start_cloudflared_tunnel():
+    # 检查是否启用 Cloudflare
+    if ENABLE_CLOUDFLARE not in ['y', 'yes', '1', 'true']:
+        logging.info("Cloudflare 已禁用，跳过启动")
+        return True
+    
     global cloudflared_process
     cloudflared_path = os.path.join(FILE_PATH, "cloudflared")
     if not os.path.exists(cloudflared_path):
@@ -158,6 +183,7 @@ def start_cloudflared_tunnel():
             cloudflared_path,
             "--no-autoupdate",
             "tunnel",
+            "run",
             "--token",
             CF_TUNNEL_TOKEN
         ]
@@ -247,9 +273,9 @@ async def main():
         logging.error("启动 web 进程失败")
         return
 
-    # 下载并启动 Cloudflared
+    # 下载并启动 Cloudflared（根据 ENABLE_CLOUDFLARE 常量决定）
     if not await loop.run_in_executor(None, download_cloudflared):
-        logging.warning("Cloudflared 下载失败，跳过 Tunnel")
+        logging.warning("Cloudflared 下载失败")
     else:
         start_cloudflared_tunnel()
 
@@ -257,10 +283,14 @@ async def main():
     logging.info(f"UUID: {UUID}")
     logging.info(f"服务运行在端口 {WORK_PORT}")
     
-    if CF_TUNNEL_TOKEN:
-        logging.info("使用 Cloudflare 隧道令牌连接固定域名")
+    # 显示 Cloudflare 状态
+    if ENABLE_CLOUDFLARE in ['y', 'yes', '1', 'true']:
+        if CF_TUNNEL_TOKEN:
+            logging.info("Cloudflare 固定域名隧道已启用")
+        else:
+            logging.info("Cloudflare 临时域名隧道已启用")
     else:
-        logging.info("使用 Cloudflare 临时域名隧道")
+        logging.info("Cloudflare 已禁用")
     
     logging.info(f"程序将持续运行，{TUNNEL_DURATION}秒后清理临时目录")
 
