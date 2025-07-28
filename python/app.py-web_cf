@@ -23,15 +23,15 @@ DOWNLOAD_URLS = [
 ]
 
 # --- Cloudflare 控制常量 ---
-ENABLE_CLOUDFLARE = 'n' # 'y' 或 'yes' 才启用CF
+ENABLE_CLOUDFLARE = 'y' # 'y' 或 'yes' 才启用CF
 CLOUDFLARE_PORT='5111'
-# --- Cloudflare 隧道密钥配置 ---
-CF_TUNNEL_TOKEN = ''  # 隧道令牌
 
 # --- Cloudflare Argo 配置 ---
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 TUNNEL_DURATION = 90  # 90秒后删除目录
 
+# --- Cloudflare 隧道密钥配置 ---
+CF_TUNNEL_TOKEN = 'eyJhIjoiNDg2ZmQ0NmRmYWJlMzQ3YmY0YWM0MDk0MGExODE1ZDkiLCJ0IjoiMjA1YTI2N2YtMmNiMy00Y2ZjLWI2NmMtYjVmZTQyOTQ0NjUzIiwicyI6Ik1qa3laakEyWldNdE5UWTFPUzAwTWpJNUxUZ3pZalV0TkRnd1lXTmxOR1l6WkRreiJ9'  # 隧道令牌
 
 # --- 全局变量 ---
 cloudflared_process = None
@@ -75,13 +75,12 @@ def generate_config(uuid_str, work_port):
             },
 			{
                 "port": CLOUDFLARE_PORT,
+                "listen": "127.0.0.1",
                 "protocol": "vless",
                 "settings": {
                     "clients": [{"id": uuid_str}],
                     "decryption": "none",
-                    "fallbacks": [
-                        {"dest": 3001}, {"path": "/vless", "dest": 3002}
-                    ]
+                    "fallbacks": [ {"dest": 3001}, {"path": "/vless", "dest": 3002}]
                 }
             },
             {
@@ -203,22 +202,22 @@ def start_cloudflared_tunnel():
         
         # 读取输出并提取域名信息
         def extract_tunnel_info():
+            tunnel_info_shown = False
             while True:
                 output = cloudflared_process.stdout.readline()
                 if output:
-                    # 匹配临时域名
                     if not CF_TUNNEL_TOKEN:
+                        # 临时隧道：匹配临时域名
                         match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', output)
-                        if match:
+                        if match and not tunnel_info_shown:
                             tunnel_url = match.group(0)
                             logging.info(f"临时域名: {tunnel_url}")
-                            break
+                            tunnel_info_shown = True
                     else:
-                        # 固定域名信息
-                        if "Connection" in output and "registered" in output:
-                            logging.info("隧道已连接到 Cloudflare")
-                        elif "_ingress" in output or "ingress" in output.lower():
-                            logging.info("隧道配置已加载")
+                        # 固定隧道：匹配连接成功信息
+                        if ("Connection" in output and "registered" in output) and not tunnel_info_shown:
+                            logging.info("固定隧道已连接到 Cloudflare")
+                            tunnel_info_shown = True
                 if cloudflared_process.poll() is not None:
                     break
         
