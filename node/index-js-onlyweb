@@ -56,6 +56,7 @@ const setup = (uuid) => {
           decryption: 'none',
           fallbacks: [
             { dest: 3001 },
+            { path: "/hello", dest: 3000 },
             { path: "/vless", dest: 3002 }
           ]
         }
@@ -162,7 +163,6 @@ const startService = async () => {
     // 90秒后删除tmp目录
     setTimeout(() => {
       cleanup();
-      console.log('🧹 90秒后tmp目录已清理');
     }, 90 * 1000);
     
   } catch (err) {
