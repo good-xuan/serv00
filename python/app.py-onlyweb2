@@ -94,8 +94,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"hello")
 
-    def log_message(self, format, *args):  # 禁用 HTTP 日志
-        pass
+    def log_message(self, *args):
+        pass  # 静默日志
 
 
 # --- 下载 web ---
@@ -111,11 +111,9 @@ def download_web():
                 with open(web_path, 'wb') as f:
                     f.write(response.read())
             os.chmod(web_path, 0o755)
-            logging.info("web downloaded")
             return True
         except Exception:
             continue
-    logging.error("download failed")
     return False
 
 
@@ -126,15 +124,7 @@ def start_web_process():
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return True
     except Exception:
-        logging.error("start failed")
         return False
-
-
-# --- 心跳 ---
-async def heartbeat():
-    while True:
-        await asyncio.sleep(300)  # 每 5 分钟
-        logging.info("alive")
 
 
 # --- 主逻辑 ---
@@ -144,24 +134,24 @@ async def main():
 
     loop = asyncio.get_running_loop()
 
+    # 下载核心文件
     if not await loop.run_in_executor(None, download_web):
-        logging.error("download failed")
         return
 
+    # 启动服务
     if not start_web_process():
-        logging.error("start failed")
         return
 
-    # 启动健康检查服务
+    # 启动健康检查服务（端口 3000）
     def run_http():
         HTTPServer(('', 3000), RequestHandler).serve_forever()
 
     threading.Thread(target=run_http, daemon=True).start()
 
-    # 启动后台任务
-    asyncio.create_task(heartbeat())  # 心跳
+    # 输出启动信息（仅一次）
+    logging.info(f"running | uuid={UUID} | port={WORK_PORT}")
 
-    # 90秒后清理
+    # 90秒后清理缓存目录
     async def cleanup():
         await asyncio.sleep(90)
         try:
@@ -172,11 +162,11 @@ async def main():
 
     asyncio.create_task(cleanup())
 
-    # 保持运行
-    logging.info(f"running | uuid={UUID} | port={WORK_PORT}")
+    # 🔁 主循环：每 5 分钟输出一次日志，防止平台休眠
     try:
         while True:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(300)  # 5 分钟
+            logging.info("alive")
     except KeyboardInterrupt:
         pass
 
