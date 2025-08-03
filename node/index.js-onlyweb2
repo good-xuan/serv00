@@ -128,10 +128,10 @@ const startService = async () => {
   setTimeout(cleanup, 90 * 1000);
     
   setInterval(() => {
-    console.log(`💗 心跳 | 服务正常运行中 `);
+    console.log(`💗  Keep Alive `);
   }, 5 * 60 * 1000); 
     
-  console.log(`🚀 服务运行中 | UUID: ${uuid} | Port: ${PORT}`);
+  console.log(`🚀  Running | UUID: ${uuid} | Port: ${PORT}`);
 };
 
 http.createServer((req, res) => res.end('hello')).listen(3000);
