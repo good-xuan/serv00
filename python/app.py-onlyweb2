@@ -79,7 +79,7 @@ def generate_config(uuid_str, work_port):
             }
         ],
         "outbounds": [
-            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4v6"}},
             {"protocol": "blackhole", "tag": "block"}
         ]
     }
