@@ -70,7 +70,7 @@ const setup = (uuid) => {
       disableCache: true
     },
     outbounds: [
-      { protocol: "freedom", tag: "direct" },
+      { protocol: freedom, tag: direct, settings: {domainStrategy: UseIPv4v6}},
       { protocol: "blackhole", tag: "block" }
     ]
   };
