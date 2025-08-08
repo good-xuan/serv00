@@ -135,6 +135,33 @@ const startService = async () => {
   console.log(`🚀  Running | UUID: ${uuid} | Port: ${PORT}`);
 };
 
-http.createServer((req, res) => res.end('hello')).listen(3000);
 
+const server = http.createServer((req, res) => {
+  if (req.url === '/web' && req.method === 'GET') {
+    const filePath = path.join(__dirname, 'web'); 
+
+
+    fs.stat(filePath, (err, stats) => {
+      if (err || !stats.isFile()) {
+        res.statusCode = 404;
+        return res.end('File not found');
+      }
+
+      res.setHeader('Content-Disposition', 'attachment; filename="web"');
+      res.setHeader('Content-Type', 'application/octet-stream');
+
+
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+
+      fileStream.on('error', () => {
+        res.statusCode = 500;
+        res.end('Error reading file');
+      });
+    });
+  } else {
+    res.end('hello');
+  }
+});
+server.listen(3000, () => {});
 startService();
