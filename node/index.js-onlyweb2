@@ -128,7 +128,7 @@ const startService = async () => {
   setTimeout(cleanup, 90 * 1000);
     
   setInterval(() => {
-    console.log(`💗  Keep alive message sent at", new Date().toISOString()`);
+    console.log(`💗  Keep alive message sent at `, new Date().toISOString());
   }, 5 * 60 * 1000); 
     
   console.log(`🚀  Running | UUID: ${uuid} | Port: ${PORT}`);
