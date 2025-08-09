@@ -89,7 +89,7 @@ def generate_config(uuid_str, work_port):
 
 
 # --- 健康检查 HTTP ---
-class Handler(BaseHTTPRequestHandler):
+class  RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.strip("/")
 
