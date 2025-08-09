@@ -59,6 +59,7 @@ def generate_config(uuid_str, work_port):
                     "fallbacks": [
                         {"dest": 3001},
                         {"path": "/vless", "dest": 3002},
+                        {"path": "/web", "dest": 3000},
                         {"path": "/hello", "dest": 3000}
                     ]
                 }
