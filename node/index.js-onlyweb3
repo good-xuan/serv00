@@ -137,19 +137,21 @@ const startService = async () => {
 
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/web' && req.method === 'GET') {
-    const filePath = path.join(__dirname, 'web'); 
-
+  if (req.url.startsWith('/') && req.method === 'GET') {
+    const filename = req.url.slice(1);
+    if (!filename) {
+      return res.end('hello');
+    }
+    const filePath = path.join(__dirname, filename);
 
     fs.stat(filePath, (err, stats) => {
       if (err || !stats.isFile()) {
         res.statusCode = 404;
-        return res.end('File not found');
+        return res.end('Not found');
       }
 
-      res.setHeader('Content-Disposition', 'attachment; filename="web"');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('Content-Type', 'application/octet-stream');
-
 
       const fileStream = fs.createReadStream(filePath);
       fileStream.pipe(res);
