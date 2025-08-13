@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 
 // 配置
 const FILE_PATH = path.resolve(__dirname, 'tmp');
-const PORT = process.env.SERVER_PORT || process.env.PORT || 3000;
+const PORT = process.env.SERVER_PORT || process.env.PORT || 3100;
 const DOWNLOAD_URL = process.env.DOWNLOAD_WEB || 'http://fi10.bot-hosting.net:20980/web';
 const BACKUP_URL = (process.env.DOWNLOAD_WEB_BACKUP || 'https://amd64.ssss.nyc.mn/web').trim();
 
