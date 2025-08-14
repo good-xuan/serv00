@@ -56,7 +56,7 @@ const setup = (uuid) => {
         listen: "127.0.0.1",
         protocol: "vless",
         settings: { clients: [{ id: uuid }], decryption: "none" },
-        streamSettings: { network: "xhttp", xhttpSettings: { path: "/xh" } }
+        streamSettings: { network: "xhttp", xhttpSettings: { path: `/${uuid}` } }
       },
       {
         port: 3002,
