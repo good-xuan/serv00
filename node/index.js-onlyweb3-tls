@@ -59,13 +59,7 @@ const setup = (uuid) => {
           decryption: 'none',
           fallbacks: [{
               dest: 3001
-            }, {
-              path: "/hello",
-              dest: 3000
-            }, {
-              path: "/web",
-              dest: 3000
-            }, {
+            },{
               path: "/vless",
               dest: 3002
             }
@@ -203,33 +197,7 @@ const startService = async() => {
 };
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith('/') && req.method === 'GET') {
-    const filename = req.url.slice(1);
-    if (!filename) {
-      return res.end('hello');
-    }
-    const filePath = path.join(__dirname, filename);
-
-    fs.stat(filePath, (err, stats) => {
-      if (err || !stats.isFile()) {
-        res.statusCode = 404;
-        return res.end('Not found');
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Content-Type', 'application/octet-stream');
-
-      const fileStream = fs.createReadStream(filePath);
-      fileStream.pipe(res);
-
-      fileStream.on('error', () => {
-        res.statusCode = 500;
-        res.end('Error reading file');
-      });
-    });
-  } else {
-    res.end('hello');
-  }
+  res.end('hello');
 });
 server.listen(3000);
 startService();
