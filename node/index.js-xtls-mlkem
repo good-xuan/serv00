@@ -82,10 +82,12 @@ const setup = (uuid) =>
           "tlsSettings":
           {
             "certificates": [
+
               {
                 "certificate": [],
                 "key": []
               }
+
             ]
           }
         }
