@@ -1,0 +1,55 @@
+---
+- name: Deploy Xray to remote hosts
+  hosts: all
+  become: yes
+  vars:
+    tmp_dir: "/tmp"
+    dest_dir: "/opt/xray"
+    zip_file: "{{ tmp_dir }}/xray-linux-64.zip"
+  tasks:
+
+    - name: Ensure destination directory exists
+      ansible.builtin.file:
+        path: "{{ dest_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Get latest Xray release info
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+        return_content: yes
+      register: xray_release
+
+    - name: Parse latest tag_name from release JSON
+      ansible.builtin.set_fact:
+        xray_tag: "{{ (xray_release.content | from_json).tag_name }}"
+
+    - name: Set Xray download URL
+      ansible.builtin.set_fact:
+        xray_url: "https://gh.uptk.cloudns.org/https://github.com/XTLS/Xray-core/releases/download/{{ xray_tag }}/Xray-linux-64.zip"
+
+    - name: Download Xray zip
+      ansible.builtin.get_url:
+        url: "{{ xray_url }}"
+        dest: "{{ zip_file }}"
+        mode: '0644'
+        force: yes
+
+    - name: Unzip Xray
+      ansible.builtin.unarchive:
+        src: "{{ zip_file }}"
+        dest: "{{ tmp_dir }}"
+        remote_src: yes
+        extra_opts: [ "-o" ]
+
+    - name: Copy Xray binary to /opt/xray
+      ansible.builtin.copy:
+        src: "{{ tmp_dir }}/xray"
+        dest: "{{ dest_dir }}/xray"
+        mode: '0755'
+        force: yes
+      register: xray_copy
+
+    - name: Restart xray process via PM2
+      ansible.builtin.shell: pm2 restart xray
+      when: xray_copy is defined and xray_copy.changed
