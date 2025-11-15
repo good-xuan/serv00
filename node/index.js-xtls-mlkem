@@ -83,10 +83,29 @@ const setup = (uuid) =>
           {
             "certificates": [
 
-              {
-                "certificate": [],
-                "key": []
-              }
+{
+  "certificate": [
+    "-----BEGIN CERTIFICATE-----",
+    "MIIBgDCCASagAwIBAgIRAKNSEPd9Qjr5g8E+9nlgyDkwCgYIKoZIzj0EAwIwJjER",
+    "MA8GA1UEChMIWHJheSBJbmMxETAPBgNVBAMTCFhyYXkgSW5jMB4XDTI1MTExNTAy",
+    "MDIwN1oXDTI2MDIxMzAzMDIwN1owJjERMA8GA1UEChMIWHJheSBJbmMxETAPBgNV",
+    "BAMTCFhyYXkgSW5jMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEW+cCxATbtzOD",
+    "5VRCpQWXtTM8iVxBovbCCdkTqK6fixd+rltFDuYrTwY70L8kgofDr1QNTUCQHw0R",
+    "BJeYrN7LQKM1MDMwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMB",
+    "MAwGA1UdEwEB/wQCMAAwCgYIKoZIzj0EAwIDSAAwRQIgb6NjCLeI6UQPLuPsr8/R",
+    "00JFp4fk2+ESfz/8EOiBEUMCIQDZKh9sSf6+zbyhaWPdLav3istZn7hK+1MDcDrk",
+    "1m1sbw==",
+    "-----END CERTIFICATE-----"
+  ],
+  "key": [
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg4bkvlqAM826H7JEL",
+    "goDN8Pn0jar8LLj9mT0UToByV8OhRANCAARb5wLEBNu3M4PlVEKlBZe1MzyJXEGi",
+    "9sIJ2ROorp+LF36uW0UO5itPBjvQvySCh8OvVA1NQJAfDREEl5is3stA",
+    "-----END RSA PRIVATE KEY-----"
+  ]
+}
+
 
             ]
           }
