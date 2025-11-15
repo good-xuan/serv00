@@ -1,0 +1,20 @@
+export default {
+    async fetch(request, env) {
+      let url = new URL(request.url);
+  
+      // 只要路径以 / 开头就代理
+      if (url.pathname.startsWith('/')) {
+        url.protocol = 'http:'; 
+        url.hostname = 'sudo.wisp';
+        url.port = '12121';
+  
+        // 转发请求
+        let new_request = new Request(url.toString(), request);
+        return fetch(new_request);
+      }
+  
+      // 静态资源
+      return env.ASSETS.fetch(request);
+    },
+  };
+  
