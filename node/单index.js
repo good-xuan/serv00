@@ -494,7 +494,7 @@ trojan://${UUID}@${CFIP}:${CFPORT}?security=tls&sni=${argoDomain}&fp=firefox&typ
         fs.writeFileSync(subPath, base64Sub); // 存入 base64
         console.log(`${FILE_PATH}/sub.txt saved successfully`);
         
-        uploadNodes();
+       
         resolve(subTxt);
       }, 2000);
     });
@@ -502,32 +502,6 @@ trojan://${UUID}@${CFIP}:${CFPORT}?security=tls&sni=${argoDomain}&fp=firefox&typ
 }
 
 // --- 自动上传节点 ---
-async function uploadNodes() {
-  if (UPLOAD_URL && PROJECT_URL) {
-    const subscriptionUrl = `${PROJECT_URL}/${SUB_PATH}`;
-    const jsonData = { subscription: [subscriptionUrl] };
-    try {
-      const res = await httpRequest(`${UPLOAD_URL}/api/add-subscriptions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      }, jsonData);
-      if (res.status === 200) console.log('Subscription uploaded successfully');
-    } catch (error) {}
-  } else if (UPLOAD_URL) {
-    if (!fs.existsSync(listPath)) return;
-    const content = fs.readFileSync(listPath, 'utf-8');
-    const nodes = content.split('\n').filter(line => /(vless|vmess|trojan|hysteria2|tuic):\/\//.test(line));
-    if (nodes.length === 0) return;
-    
-    try {
-       const res = await httpRequest(`${UPLOAD_URL}/api/add-nodes`, {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' }
-       }, { nodes });
-       if (res.status === 200) console.log('Nodes uploaded successfully');
-    } catch (error) {}
-  }
-}
 
 // --- 90s后清理 ---
 function cleanFiles() {
@@ -552,21 +526,7 @@ function cleanFiles() {
 cleanFiles();
 
 // --- 自动保活 ---
-async function AddVisitTask() {
-  if (!AUTO_ACCESS || !PROJECT_URL) {
-    console.log("Skipping adding automatic access task");
-    return;
-  }
-  try {
-    await httpRequest('https://oooo.serv00.net/add-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }, { url: PROJECT_URL });
-    console.log(`automatic access task added successfully`);
-  } catch (error) {
-    console.error(`Add automatic access task faild: ${error.message}`);
-  }
-}
+
 
 // --- 启动入口 ---
 async function startserver() {
@@ -577,7 +537,6 @@ async function startserver() {
     await generateConfig();
     await downloadFilesAndRun();
     await extractDomains();
-    await AddVisitTask();
   } catch (error) {
     console.error('Error in startserver:', error);
   }
