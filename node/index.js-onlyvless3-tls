@@ -86,7 +86,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
     console.log(`🚀 Core Running | UUID: ${uuid} | Port: ${PORT} (TLS Enabled)`);
 
     // 启动 Argo
-    const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-autoupdate', '--no-tls-verify'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-autoupdate', '--no-tls-verify', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
     tunnel.stderr.on('data', d => {
       const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
       if (match) {
