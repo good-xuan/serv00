@@ -106,7 +106,7 @@ const printLink = (uuid, host) => {
     // F. 启动 Argo (静态/临时自动切换)
     if (ARGO_TOKEN && ARGO_DOMAIN) {
         console.log(`☁️  Static Argo Tunnel: ${ARGO_DOMAIN}`);
-        spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'inherit', detached: true }).unref();
+        spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
         printLink(uuid, ARGO_DOMAIN);
     } else {
         console.log('☁️  Temp Argo Tunnel...');
