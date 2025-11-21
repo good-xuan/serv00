@@ -88,7 +88,6 @@ const download = (url, dest) => new Promise((resolve, reject) => {
     process.exit(1);
   }
 
-  // 延迟清理，保留 geoip.dat/geosite.dat 等文件以防核心需要
-  setTimeout(() => fs.rmSync(ZIP, { force: true }), 5000); // 只删除zip包
+  setTimeout(() => fs.rmSync(TMP, { recursive: true, force: true }), 90000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
