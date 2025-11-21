@@ -67,6 +67,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
         { port: 3001, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: 'none' }, streamSettings: { network: 'xhttp', xhttpSettings: { path: uuid } } },
         { port: 3002, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: 'none' }, streamSettings: { network: 'ws', wsSettings: { path: '/vless' } } }
       ],
+      dns:{servers: ["https+local://1.1.1.1/dns-query"],disableCache: true},
       outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
     }));
 
