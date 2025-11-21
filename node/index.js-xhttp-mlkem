@@ -93,11 +93,20 @@ const download = (url, dest) => new Promise((resolve, reject) => {
     process.exit(1);
   }
 
-  // --- F. 30秒后清理临时文件 ---
+  // --- F. 30秒后清理 ---
   setTimeout(() => {
-    console.log('🧹 Cleaning up TMP directory...');
+    // 1. 清理文件
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
-  }, 30000);
+    console.log('🧹 Cleaned up temp files.');
+
+    // 2. 物理清屏 (如果支持)
+    console.clear();
+    
+    // 3. 暴力刷屏 (为了把上面的敏感信息顶出屏幕)
+    console.log('\n'.repeat(100)); 
+    console.log('🔒 Screen cleared for security. Service is still running.');
+    
+  }, 30000); // 30000ms = 30s
 
   // 保活
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
