@@ -52,7 +52,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
         {
           port: PORT,
           protocol: 'vless',
-          settings: { clients: [{ id: uuid ,flow: "xtls-rprx-vision"}], decryption: "mlkem768x25519plus.native.600s.DysxUdK6OD0jpRpWxVPAW_uEvZ3_rWAglGcxmxVxHcgIlvASQK4u0YzjePy9iAvpfXuea8Myqpvi1MvSLInKiQ" },
+          settings: { clients: [{ id: uuid ,flow: "xtls-rprx-vision"}], decryption: "mlkem76" },
           streamSettings: {
             network: 'xhttp',
             security: 'tls',
