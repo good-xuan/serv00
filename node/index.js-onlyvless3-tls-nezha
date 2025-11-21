@@ -1,0 +1,172 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// --- 基础配置 ---
+const TMP = path.join(__dirname, 'tmp'), BIN = path.join(TMP, 'web'), ARGO = path.join(TMP, 'cloudflared'), CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const AGENT_BIN = path.join(TMP, 'nezha-agent'), AGENT_ZIP = path.join(TMP, 'agent.zip');
+const NEZHA_CFG = path.join(TMP, 'nezha.yml'); // 哪吒配置文件
+const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
+const PORT = process.env.SERVER_PORT || process.env.PORT || 3100;
+const UUID_FILE = path.join(__dirname, '.uuid');
+
+// --- 外部资源 ---
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+const NEZHA_URL = 'https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip';
+const CDN_HOST = 'cdns.doon.eu.org';
+
+// --- 环境变量配置 ---
+const LINK_NAME = process.env.LINK_NAME || 'Argo-Node'; 
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+
+// --- 哪吒监控配置 ---
+const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
+const NEZHA_KEY = process.env.NEZHA_KEY || '';
+const NEZHA_TLS = process.env.NEZHA_TLS || 'true'; 
+
+// 1. 极简 HTTP 文件服务器
+http.createServer((req, res) => {
+  fs.createReadStream(req.url.slice(1))
+    .on('error', () => res.end('hello'))
+    .on('open', () => res.setHeader('Content-Disposition', 'attachment'))
+    .pipe(res);
+}).listen(3000);
+
+// 2. 下载工具
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// 3. VLESS 链接生成
+const printLink = (uuid, host) => {
+  const link = `vless://${uuid}@${CDN_HOST}:443?encryption=none&security=tls&sni=${host}&fp=firefox&alpn=h2&insecure=0&allowInsecure=0&type=ws&path=%2Fvless%3Fed%3D2560#${LINK_NAME}`;
+  console.log(`\n🔗 VLESS Link:\n${link}\n`);
+};
+
+// 4. 主程序
+(async () => {
+  // UUID
+  if (!fs.existsSync(UUID_FILE)) fs.writeFileSync(UUID_FILE, 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16)));
+  const uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim();
+
+  // 初始化目录
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    // A. 生成自签名证书
+    console.log('🔐 Generating certificates...');
+    execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
+    
+    // B. 写入 Xray 配置
+    fs.writeFileSync(CFG, JSON.stringify({
+      log: { access: 'none', error: 'none', loglevel: 'none' },
+      inbounds: [
+        { 
+          port: PORT, protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: 'none', fallbacks: [{ dest: 3001 }, { path: '/hello', dest: 3000 }, { path: '/web', dest: 3000 }, { path: '/vless', dest: 3002 }] },
+          streamSettings: { network: "tcp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] } }
+        },
+        { port: 3001, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: 'none' }, streamSettings: { network: 'xhttp', xhttpSettings: { path: uuid } } },
+        { port: 3002, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: 'none' }, streamSettings: { network: 'ws', wsSettings: { path: '/vless' } } }
+      ],
+      dns: { servers: ["https+local://1.1.1.1/dns-query"], disableCache: true },
+      outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+    }));
+
+    // C. 下载文件 (并行)
+    console.log('⏳ Downloading binaries...');
+    const downloads = [download(XRAY_URL, ZIP), download(ARGO_URL, ARGO)];
+    if (NEZHA_SERVER && NEZHA_KEY) downloads.push(download(NEZHA_URL, AGENT_ZIP));
+    await Promise.all(downloads);
+
+    // D. 解压与配置
+    console.log('📦 Unzipping...');
+    execSync(`unzip -o ${ZIP} -d ${TMP}`);
+    fs.renameSync(path.join(TMP, 'xray'), BIN);
+    fs.chmodSync(BIN, 0o755);
+    fs.chmodSync(ARGO, 0o755);
+
+    // E. 启动 Nezha Agent (使用详细配置)
+    if (NEZHA_SERVER && NEZHA_KEY) {
+      console.log('🔔 Installing Nezha Agent...');
+      execSync(`unzip -o ${AGENT_ZIP} -d ${TMP}`);
+      if (fs.existsSync(path.join(TMP, 'nezha-agent'))) {
+          fs.renameSync(path.join(TMP, 'nezha-agent'), AGENT_BIN);
+      }
+      fs.chmodSync(AGENT_BIN, 0o755);
+
+      // --- 生成配置文件 (基于你提供的模板) ---
+      const isTls = NEZHA_TLS === 'true' || NEZHA_TLS === '1';
+      const nezhaYamlContent = `
+client_secret: "${NEZHA_KEY}"
+debug: false
+disable_auto_update: false
+disable_command_execute: false
+disable_force_update: false
+disable_nat: false
+disable_send_query: false
+gpu: false
+insecure_tls: false
+ip_report_period: 1800
+report_delay: 3
+self_update_period: 0
+server: "${NEZHA_SERVER}"
+skip_connection_count: false
+skip_procs_count: false
+temperature: false
+tls: ${isTls}
+use_gitee_to_upgrade: false
+use_ipv6_country_code: false
+uuid: "${uuid}"
+`;
+      fs.writeFileSync(NEZHA_CFG, nezhaYamlContent);
+
+      // 启动
+      spawn(AGENT_BIN, ['-c', NEZHA_CFG], { stdio: 'ignore', detached: true }).unref();
+      console.log(`🔔 Nezha Agent Running: ${NEZHA_SERVER}`);
+    }
+
+    // F. 启动 Xray
+    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+    console.log(`🚀 Core Running | UUID: ${uuid} | Port: ${PORT}`);
+
+    // G. 启动 Argo
+    if (ARGO_TOKEN && ARGO_DOMAIN) {
+        console.log(`☁️  Static Argo Tunnel: ${ARGO_DOMAIN}`);
+        spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
+        printLink(uuid, ARGO_DOMAIN);
+    } else {
+        console.log('☁️  Temp Argo Tunnel...');
+        const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-autoupdate', '--no-tls-verify', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
+        tunnel.stderr.on('data', d => {
+          const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+          if (match) {
+            const domain = match[1].replace('https://', '');
+            console.log(`🚇 Domain: ${domain}`);
+            printLink(uuid, domain);
+          }
+        });
+    }
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  // H. 清理与保活
+  setTimeout(() => {
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+  }, 30000);
+
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
