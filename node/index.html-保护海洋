@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OceanGuard | 守护蔚蓝之心</title>
+    <!-- 引入字体 Montserrat (现代无衬线) -->
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;500;700;900&display=swap" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* --- 核心变量 --- */
+        :root {
+            --surface-blue: #006994;   /* 海面蓝 */
+            --mid-blue: #003366;       /* 中层蓝 */
+            --deep-blue: #001f3f;      /* 深海蓝 */
+            --cyan-accent: #39cccc;    /* 亮青色点缀 */
+            --white: #ffffff;
+            --coral: #ff7f50;          /* 珊瑚色警告 */
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Montserrat', sans-serif;
+            color: var(--white);
+            /* 模拟从海面到深海的渐变背景 */
+            background: linear-gradient(180deg, var(--surface-blue) 0%, var(--mid-blue) 40%, var(--deep-blue) 100%);
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* --- 动态气泡背景 (CSS Animation) --- */
+        .bubbles {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            pointer-events: none;
+        }
+        .bubble {
+            position: absolute;
+            bottom: -100px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            animation: rise 15s infinite ease-in;
+        }
+        /* 随机生成不同大小和位置的气泡 */
+        .bubble:nth-child(1) { width: 40px; height: 40px; left: 10%; animation-duration: 8s; }
+        .bubble:nth-child(2) { width: 20px; height: 20px; left: 20%; animation-duration: 5s; animation-delay: 1s; }
+        .bubble:nth-child(3) { width: 50px; height: 50px; left: 35%; animation-duration: 10s; animation-delay: 2s; }
+        .bubble:nth-child(4) { width: 80px; height: 80px; left: 50%; animation-duration: 12s; animation-delay: 0s; }
+        .bubble:nth-child(5) { width: 35px; height: 35px; left: 55%; animation-duration: 6s; animation-delay: 1s; }
+        .bubble:nth-child(6) { width: 45px; height: 45px; left: 65%; animation-duration: 8s; animation-delay: 3s; }
+        .bubble:nth-child(7) { width: 90px; height: 90px; left: 70%; animation-duration: 12s; animation-delay: 2s; }
+        .bubble:nth-child(8) { width: 25px; height: 25px; left: 80%; animation-duration: 6s; animation-delay: 0.5s; }
+
+        @keyframes rise {
+            0% { bottom: -100px; transform: translateX(0); }
+            50% { transform: translateX(50px); }
+            100% { bottom: 120vh; transform: translateX(-50px); }
+        }
+
+        /* --- 导航栏 --- */
+        nav {
+            padding: 2rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 1000;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+        }
+
+        .logo { font-size: 1.8rem; font-weight: 900; letter-spacing: 2px; }
+        .logo span { color: var(--cyan-accent); }
+
+        .btn-donate {
+            padding: 0.7rem 2rem;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid var(--white);
+            color: var(--white);
+            border-radius: 50px;
+            font-weight: bold;
+            transition: 0.3s;
+            text-decoration: none;
+            backdrop-filter: blur(5px);
+        }
+        .btn-donate:hover { background: var(--cyan-accent); border-color: var(--cyan-accent); color: var(--deep-blue); }
+
+        /* --- Hero 区域 --- */
+        .hero {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 0 1rem;
+            /* 背景图视差效果 */
+            background: url('https://picsum.photos/seed/ocean/1920/1080') no-repeat center center;
+            background-size: cover;
+            background-attachment: fixed; /* 关键：固定背景实现视差 */
+            position: relative;
+        }
+        
+        /* 遮罩层，让文字更清晰 */
+        .hero::after {
+            content: ''; position: absolute; top:0; left:0; width:100%; height:100%;
+            background: rgba(0,31,63,0.4);
+        }
+
+        .hero-content { position: relative; z-index: 1; }
+        
+        .hero h1 {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            text-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            letter-spacing: -2px;
+        }
+
+        .hero p { font-size: 1.3rem; max-width: 600px; margin: 0 auto 2rem; }
+
+        .scroll-down {
+            position: absolute;
+            bottom: 30px;
+            animation: bounce 2s infinite;
+            font-size: 2rem;
+            color: var(--cyan-accent);
+        }
+
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+            60% { transform: translateY(-5px); }
+        }
+
+        /* --- 危机板块 (Cards) --- */
+        section { padding: 6rem 10%; }
+
+        .section-title { text-align: center; margin-bottom: 4rem; }
+        .section-title h2 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .section-title p { color: var(--cyan-accent); text-transform: uppercase; letter-spacing: 2px; }
+
+        .threat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+        }
+
+        .threat-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 2.5rem;
+            border-radius: 15px;
+            text-align: center;
+            transition: 0.3s;
+        }
+        .threat-card:hover { transform: translateY(-10px); background: rgba(255, 255, 255, 0.1); }
+
+        .threat-icon { font-size: 3rem; color: var(--coral); margin-bottom: 1.5rem; }
+        .threat-card h3 { margin-bottom: 1rem; font-size: 1.5rem; }
+        .threat-card p { opacity: 0.8; font-size: 0.95rem; line-height: 1.6; }
+
+        /* --- 沉浸式数据栏 --- */
+        .stats-bar {
+            background: rgba(0,0,0,0.3);
+            display: flex;
+            justify-content: space-around;
+            padding: 3rem 5%;
+            flex-wrap: wrap;
+            gap: 2rem;
+            text-align: center;
+        }
+        .stat-item h3 { font-size: 3.5rem; color: var(--cyan-accent); font-weight: 700; margin-bottom: 0.5rem; }
+        .stat-item p { font-size: 1rem; opacity: 0.9; }
+
+        /* --- 海洋生物画廊 (Gallery) --- */
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .gallery-item {
+            position: relative;
+            height: 250px;
+            overflow: hidden;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+
+        .gallery-item img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .gallery-item:hover img { transform: scale(1.1); }
+
+        .gallery-overlay {
+            position: absolute;
+            bottom: 0; left: 0; width: 100%;
+            background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+            padding: 20px;
+            transform: translateY(100%);
+            transition: 0.3s;
+        }
+        .gallery-item:hover .gallery-overlay { transform: translateY(0); }
+
+        /* --- Footer --- */
+        footer {
+            background: #000;
+            padding: 3rem;
+            text-align: center;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        /* --- 响应式 --- */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.8rem; }
+            .stats-bar { flex-direction: column; }
+            .nav { padding: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 动态气泡容器 -->
+    <div class="bubbles">
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+        <div class="bubble"></div>
+    </div>
+
+    <!-- 导航栏 -->
+    <nav>
+        <div class="logo">Ocean<span>Guard</span></div>
+        <a href="#action" class="btn-donate">加入行动</a>
+    </nav>
+
+    <!-- Hero 主屏 -->
+    <header class="hero">
+        <div class="hero-content">
+            <h1>The Ocean is Calling</h1>
+            <p>海洋覆盖了地球 70% 的表面，却承载了 100% 的生命未来。此刻，深蓝正在求救。</p>
+        </div>
+        <div class="scroll-down"><i class="fas fa-chevron-down"></i></div>
+    </header>
+
+    <!-- 威胁板块 -->
+    <section id="threats">
+        <div class="section-title">
+            <p>Silent Crisis</p>
+            <h2>海洋面临的威胁</h2>
+        </div>
+        <div class="threat-grid">
+            <!-- 卡片 1 -->
+            <div class="threat-card">
+                <i class="fas fa-wine-bottle threat-icon"></i>
+                <h3>塑料污染</h3>
+                <p>每年约有 800 万吨塑料流入海洋。微塑料已经进入食物链，威胁海洋生物甚至人类健康。</p>
+            </div>
+            <!-- 卡片 2 -->
+            <div class="threat-card">
+                <i class="fas fa-fish threat-icon"></i>
+                <h3>过度捕捞</h3>
+                <p>工业化捕捞正在耗尽鱼类资源，破坏珊瑚礁生态，许多物种在被发现之前就已经濒临灭绝。</p>
+            </div>
+            <!-- 卡片 3 -->
+            <div class="threat-card">
+                <i class="fas fa-temperature-high threat-icon"></i>
+                <h3>气候变暖</h3>
+                <p>海洋吸收了过量的二氧化碳，导致海水酸化和升温，珊瑚礁正在全球范围内发生大规模白化。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 数据栏 -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <h3>50%</h3>
+            <p>地球氧气来自海洋</p>
+        </div>
+        <div class="stat-item">
+            <h3>8M</h3>
+            <p>吨塑料/年入海</p>
+        </div>
+        <div class="stat-item">
+            <h3>30%</h3>
+            <p>2030年保护目标</p>
+        </div>
+    </div>
+
+    <!-- 美丽的海洋 (Gallery) -->
+    <section id="beauty">
+        <div class="section-title">
+            <p>Worth Saving</p>
+            <h2>深蓝宝藏</h2>
+        </div>
+        <div class="gallery-grid">
+            <div class="gallery-item">
+                <!-- 种子: turtle -->
+                <img src="https://picsum.photos/seed/turtle/600/400" alt="Sea Turtle">
+                <div class="gallery-overlay"><h4>海龟</h4></div>
+            </div>
+            <div class="gallery-item">
+                <!-- 种子: whale -->
+                <img src="https://picsum.photos/seed/whale/600/400" alt="Whale">
+                <div class="gallery-overlay"><h4>座头鲸</h4></div>
+            </div>
+            <div class="gallery-item">
+                <!-- 种子: coral -->
+                <img src="https://picsum.photos/seed/coral/600/400" alt="Coral Reef">
+                <div class="gallery-overlay"><h4>珊瑚礁</h4></div>
+            </div>
+            <div class="gallery-item">
+                <!-- 种子: jellyfish -->
+                <img src="https://picsum.photos/seed/jellyfish/600/400" alt="Jellyfish">
+                <div class="gallery-overlay"><h4>水母</h4></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 行动号召 -->
+    <section id="action" style="text-align: center; padding-top: 2rem;">
+        <h2 style="font-size: 3rem; margin-bottom: 1.5rem;">Be the Solution</h2>
+        <p style="max-width: 600px; margin: 0 auto 2rem; font-size: 1.1rem; opacity: 0.8;">
+            哪怕我们身处内陆，我们的每一次选择都影响着海洋。减少使用一次性塑料，支持可持续海鲜。
+        </p>
+        <a href="#" class="btn-donate" style="font-size: 1.2rem; background: var(--cyan-accent); color: var(--deep-blue);">承诺守护</a>
+    </section>
+
+    <footer>
+        <p>&copy; 2025 OceanGuard. Deep Blue Dream.</p>
+    </footer>
+
+    <script>
+        // 图片容错
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                this.src = 'https://placehold.co/600x400/003366/ffffff?text=Deep+Sea';
+            };
+        });
+
+        // 简单的滚动显现效果 (Fade-in on scroll)
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = "1";
+                    entry.target.style.transform = "translateY(0)";
+                }
+            });
+        });
+
+        // 给卡片添加初始样式
+        document.querySelectorAll('.threat-card').forEach(card => {
+            card.style.opacity = "0";
+            card.style.transform = "translateY(30px)";
+            card.style.transition = "all 0.6s ease-out";
+            observer.observe(card);
+        });
+    </script>
+</body>
+</html>
