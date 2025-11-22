@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WildGuard | Voices for the Voiceless</title>
+    <!-- 引入字体：Playfair Display (标题) 和 Open Sans (正文) -->
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <!-- Font Awesome 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* --- 核心变量 --- */
+        :root {
+            --primary: #f39c12;    /* 琥珀色 - 象征警示与荒野 */
+            --dark-bg: #111111;    /* 深黑背景 */
+            --card-bg: #1e1e1e;    /* 卡片深灰 */
+            --text-light: #ecf0f1; /* 浅白文字 */
+            --text-gray: #bdc3c7;  /* 灰色文字 */
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Open Sans', sans-serif;
+            background-color: var(--dark-bg);
+            color: var(--text-light);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3 {
+            font-family: 'Playfair Display', serif;
+            font-weight: 700;
+        }
+
+        a { text-decoration: none; color: inherit; transition: 0.3s; }
+        
+        /* --- 导航栏 --- */
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 8%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 1000;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            color: var(--primary);
+            letter-spacing: 1px;
+        }
+
+        .logo span { color: white; }
+
+        .nav-links { display: flex; gap: 2.5rem; }
+        .nav-links a { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
+        .nav-links a:hover { color: var(--primary); }
+
+        .donate-btn {
+            padding: 0.7rem 1.5rem;
+            background: var(--primary);
+            color: var(--dark-bg);
+            font-weight: bold;
+            border-radius: 4px;
+        }
+        .donate-btn:hover { background: white; }
+
+        .menu-toggle { display: none; font-size: 1.5rem; cursor: pointer; }
+
+        /* --- Hero 区域 --- */
+        .hero {
+            height: 100vh;
+            /* 使用 picsum 的 leopard 种子图 */
+            background: linear-gradient(to bottom, rgba(0,0,0,0.3), rgba(17,17,17,1)), url('https://picsum.photos/seed/leopard/1920/1080');
+            background-size: cover;
+            background-position: center;
+            display: flex;
+            align-items: center;
+            padding: 0 8%;
+        }
+
+        .hero-content {
+            max-width: 600px;
+            margin-top: 60px;
+        }
+
+        .hero-tag {
+            background: rgba(243, 156, 18, 0.2);
+            color: var(--primary);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            display: inline-block;
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-gray);
+            margin-bottom: 2.5rem;
+        }
+
+        .btn-outline {
+            border: 2px solid var(--primary);
+            color: var(--primary);
+            padding: 1rem 2.5rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-outline:hover {
+            background: var(--primary);
+            color: var(--dark-bg);
+        }
+
+        /* --- 统计区域 --- */
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 4rem 8%;
+            background: #151515;
+            text-align: center;
+            flex-wrap: wrap;
+            gap: 2rem;
+        }
+
+        .stat-box h3 { font-size: 3rem; color: var(--primary); margin-bottom: 0.5rem; }
+        .stat-box p { color: var(--text-gray); text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; }
+
+        /* --- 濒危物种卡片 --- */
+        .species-section { padding: 6rem 8%; }
+        .section-title { margin-bottom: 3rem; display: flex; justify-content: space-between; align-items: end; }
+        .section-title h2 { font-size: 2.5rem; }
+        .view-all { color: var(--primary); font-weight: bold; }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .animal-card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            overflow: hidden;
+            transition: transform 0.3s;
+            position: relative;
+        }
+
+        .animal-card:hover { transform: translateY(-10px); }
+
+        .animal-img {
+            height: 250px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .animal-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s;
+        }
+
+        .animal-card:hover .animal-img img { transform: scale(1.1); }
+
+        .card-info { padding: 2rem; }
+        
+        .status-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: #c0392b; /* 红色濒危警告 */
+            color: white;
+            padding: 5px 10px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .card-info h3 { margin-bottom: 0.5rem; font-size: 1.5rem; }
+        .card-info p { color: var(--text-gray); font-size: 0.9rem; margin-bottom: 1.5rem; }
+        
+        .card-link {
+            color: var(--primary);
+            font-weight: bold;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+        }
+
+        /* --- 捐赠/行动区域 --- */
+        .action-section {
+            background: var(--card-bg);
+            padding: 6rem 8%;
+            display: flex;
+            align-items: center;
+            gap: 4rem;
+        }
+
+        .action-content { flex: 1; }
+        .action-content h2 { font-size: 2.5rem; margin-bottom: 1.5rem; }
+        .action-list { margin-bottom: 2rem; }
+        .action-list li { margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; color: var(--text-gray); }
+        .action-list i { color: var(--primary); }
+
+        .action-image {
+            flex: 1;
+            height: 400px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .action-image img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* --- Footer --- */
+        footer {
+            background: #000;
+            padding: 4rem 8%;
+            border-top: 1px solid #222;
+            margin-top: auto;
+        }
+
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 2rem;
+        }
+
+        .footer-brand h4 { color: var(--primary); font-size: 1.5rem; margin-bottom: 1rem; }
+        .footer-links h5 { color: white; margin-bottom: 1rem; }
+        .footer-links a { display: block; color: var(--text-gray); margin-bottom: 0.5rem; font-size: 0.9rem; }
+        .footer-links a:hover { color: var(--primary); }
+
+        /* --- 响应式 --- */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.8rem; }
+            .nav-links { display: none; } 
+            /* 这里省略了复杂的移动端菜单JS，简单隐藏 */
+            .menu-toggle { display: block; }
+            .section-title { flex-direction: column; align-items: flex-start; gap: 1rem; }
+            .action-section { flex-direction: column; }
+            .action-image { width: 100%; height: 250px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 导航栏 -->
+    <nav>
+        <div class="logo">Wild<span>Guard</span></div>
+        <div class="nav-links">
+            <a href="#">Home</a>
+            <a href="#species">Endangered</a>
+            <a href="#mission">Our Mission</a>
+            <a href="#blog">Stories</a>
+        </div>
+        <a href="#donate" class="donate-btn">Donate Now</a>
+        <div class="menu-toggle"><i class="fas fa-bars"></i></div>
+    </nav>
+
+    <!-- Hero 主视觉 -->
+    <section class="hero">
+        <div class="hero-content">
+            <span class="hero-tag">Save the Wild</span>
+            <h1>Their Survival is in <br>Our Hands.</h1>
+            <p>We are losing nature at an unprecedented rate. Join the fight to protect the world's most vulnerable species before they are gone forever.</p>
+            <a href="#species" class="btn-outline">Explore Species</a>
+        </div>
+    </section>
+
+    <!-- 数据统计 -->
+    <div class="stats">
+        <div class="stat-box">
+            <h3>69%</h3>
+            <p>Decline in wildlife populations</p>
+        </div>
+        <div class="stat-box">
+            <h3>41k+</h3>
+            <p>Species threatened with extinction</p>
+        </div>
+        <div class="stat-box">
+            <h3>100+</h3>
+            <p>Projects funded globally</p>
+        </div>
+    </div>
+
+    <!-- 濒危物种展示 -->
+    <section id="species" class="species-section">
+        <div class="section-title">
+            <div>
+                <p style="color:var(--primary); text-transform:uppercase; font-size:0.8rem; font-weight:bold;">Focus Areas</p>
+                <h2>Critical Species</h2>
+            </div>
+            <a href="#" class="view-all">View All Species <i class="fas fa-arrow-right"></i></a>
+        </div>
+
+        <div class="card-grid">
+            <!-- 老虎卡片 -->
+            <div class="animal-card">
+                <div class="status-badge">Endangered</div>
+                <div class="animal-img">
+                    <img src="https://picsum.photos/seed/tiger/600/400" alt="Tiger">
+                </div>
+                <div class="card-info">
+                    <h3>Amur Tiger</h3>
+                    <p>Poaching and habitat loss have reduced their numbers drastically in the wild.</p>
+                    <a href="#" class="card-link">Adopt a Tiger</a>
+                </div>
+            </div>
+
+            <!-- 大象卡片 -->
+            <div class="animal-card">
+                <div class="status-badge">Vulnerable</div>
+                <div class="animal-img">
+                    <img src="https://picsum.photos/seed/elephant/600/400" alt="Elephant">
+                </div>
+                <div class="card-info">
+                    <h3>African Elephant</h3>
+                    <p>Threatened by ivory trade and human conflict. They need space to roam freely.</p>
+                    <a href="#" class="card-link">Protect Habitats</a>
+                </div>
+            </div>
+
+            <!-- 犀牛卡片 -->
+            <div class="animal-card">
+                <div class="status-badge">Critically Endangered</div>
+                <div class="animal-img">
+                    <img src="https://picsum.photos/seed/rhino/600/400" alt="Rhino">
+                </div>
+                <div class="card-info">
+                    <h3>Black Rhino</h3>
+                    <p>With very few left in the wild, every single birth is a victory for conservation.</p>
+                    <a href="#" class="card-link">Stop Poaching</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 行动号召 -->
+    <section id="mission" class="action-section">
+        <div class="action-content">
+            <h2>How We Protect Them</h2>
+            <p style="color:var(--text-gray); margin-bottom:2rem;">WildGuard works in the most remote corners of the planet to ensure a future for wildlife.</p>
+            <ul class="action-list">
+                <li><i class="fas fa-shield-alt"></i> <span>Anti-Poaching Patrols</span></li>
+                <li><i class="fas fa-tree"></i> <span>Habitat Restoration</span></li>
+                <li><i class="fas fa-bullhorn"></i> <span>Community Education</span></li>
+            </ul>
+            <a href="#" class="donate-btn">Become a Volunteer</a>
+        </div>
+        <div class="action-image">
+            <!-- 随机自然/护林员图 -->
+            <img src="https://picsum.photos/seed/jungle/800/600" alt="Ranger in forest">
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-brand">
+                <h4>WildGuard</h4>
+                <p style="color:#666; max-width:300px; font-size:0.9rem;">
+                    A non-profit organization dedicated to the conservation of nature and the protection of endangered species.
+                </p>
+            </div>
+            <div class="footer-links">
+                <h5>Get Involved</h5>
+                <a href="#">Donate</a>
+                <a href="#">Adopt</a>
+                <a href="#">Campaigns</a>
+            </div>
+            <div class="footer-links">
+                <h5>About Us</h5>
+                <a href="#">Our Story</a>
+                <a href="#">Financials</a>
+                <a href="#">Careers</a>
+            </div>
+            <div class="footer-links">
+                <h5>Follow</h5>
+                <a href="#"><i class="fab fa-facebook"></i> Facebook</a>
+                <a href="#"><i class="fab fa-instagram"></i> Instagram</a>
+            </div>
+        </div>
+        <div style="text-align:center; margin-top:3rem; color:#444; font-size:0.8rem;">
+            &copy; 2025 WildGuard Foundation. Images powered by Picsum.
+        </div>
+    </footer>
+
+    <script>
+        // 简单的图片错误处理，如果关键词图片加载失败，使用备用图
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                this.src = 'https://placehold.co/600x400/222/f39c12?text=No+Image';
+            };
+        });
+
+        // 简单的移动端菜单点击（这里仅做示例，实际项目需完整展开逻辑）
+        document.querySelector('.menu-toggle').addEventListener('click', function() {
+            alert('Mobile menu clicked! (Expand logic would go here)');
+        });
+    </script>
+</body>
+</html>
