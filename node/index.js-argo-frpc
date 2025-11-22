@@ -1,0 +1,205 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// --- 基础配置 ---
+const TMP = path.join(__dirname, 'tmp'), BIN = path.join(TMP, 'web'), ARGO = path.join(TMP, 'cloudflared'), CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz'), FRPC_CFG = path.join(TMP, 'frpc.ini');
+const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
+const UUID_FILE = path.join(__dirname, '.uuid');
+
+// --- 端口分配 ---
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3100);
+const TLS_PORT = PORT + 1;
+const WEB_PORT = 3000;
+
+// --- 外部变量 ---
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+const CDN_HOST = 'cdns.doon.eu.org';
+const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+
+// --- REALITY 配置 (在此处手动填写) ---
+const REALITY_PRIVATE_KEY = process.env.REALITY_PRIVATE_KEY || 'yC7PtMJCZSJhSBt8dLMdgJStPxwHQr-tuQA5q0W59Go';
+const REALITY_PUBLIC_KEY  = process.env.REALITY_PUBLIC_KEY  || 'NtyF-w7B0fPbWuwaG99oT3TBwZwUHF_uppDiq4BYeFA';
+const REALITY_DEST = 'www.microsoft.com:443';
+const REALITY_SNI = 'www.microsoft.com';
+
+// --- FRPC 变量 ---
+const FRPS_HOST = process.env.FRPS_HOST || 'us.afrp.net';          
+const FRPS_PORT = process.env.FRPS_PORT || '7000';      
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
+const FRPC_REMOTE_PORT = process.env.FRPC_REMOTE_PORT || ''; 
+
+
+// 1. 极简 HTTP 文件服务器
+http.createServer((req, res) => {
+  fs.createReadStream(req.url.slice(1))
+    .on('error', () => res.end('Hello from Node File Server'))
+    .on('open', () => res.setHeader('Content-Disposition', 'attachment'))
+    .pipe(res);
+}).listen(WEB_PORT);
+
+// 2. 下载工具
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// 3. 获取 FRP 最新版本
+const getFrpLatestUrl = () => new Promise((resolve) => {
+    console.log('🔍 Checking latest FRP version...');
+    https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        const loc = res.headers.location;
+        if (loc) {
+            const tag = path.basename(loc); 
+            const ver = tag.startsWith('v') ? tag.slice(1) : tag; 
+            resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${ver}_linux_amd64.tar.gz`);
+        } else {
+            resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz');
+        }
+    }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
+});
+
+// 4. VLESS 链接生成
+const printLink = (uuid, host, port, remarks, type) => {
+  let link = '';
+  if (type === 'reality') {
+    link = `vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&type=tcp&sid=&insecure=1#${remarks}`;
+  } else if (type === 'argo') {
+    link = `vless://${uuid}@${CDN_HOST}:443?encryption=none&security=tls&sni=${host}&fp=chrome&type=ws&path=%2Fvless#${remarks}`;
+  }
+  console.log(`\n🔗 ${remarks} Link:\n${link}\n`);
+};
+
+// 5. 主程序
+(async () => {
+  if (!fs.existsSync(UUID_FILE)) fs.writeFileSync(UUID_FILE, 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16)));
+  const uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim();
+
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    console.log('🔐 Generating self-signed certificates for Argo...');
+    execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
+
+    console.log('⏳ Downloading binaries...');
+    const downloadList = [download(XRAY_URL, ZIP), download(ARGO_URL, ARGO)];
+    if (FRPS_HOST && FRPC_REMOTE_PORT) {
+        const frpUrl = await getFrpLatestUrl();
+        console.log(`⏬ Downloading FRP from: ${frpUrl}`);
+        downloadList.push(download(frpUrl, FRPC_TAR));
+    }
+    await Promise.all(downloadList);
+
+    console.log('📦 Unzipping Xray...');
+    execSync(`unzip -o ${ZIP} -d ${TMP}`);
+    fs.renameSync(path.join(TMP, 'xray'), BIN);
+    fs.chmodSync(BIN, 0o755);
+    fs.chmodSync(ARGO, 0o755);
+
+    // --- 写入 Xray 配置 (直接使用顶部定义的 REALITY_PRIVATE_KEY) ---
+    console.log(`⚙️  Configuring Xray...`);
+    fs.writeFileSync(CFG, JSON.stringify({
+      log: { access: 'none', error: 'none', loglevel: 'none' },
+      inbounds: [
+        { 
+          port: PORT, 
+          protocol: 'vless', 
+          settings: { clients: [{ id: uuid }], decryption: 'none' },
+          streamSettings: { 
+            network: "ws", 
+            security: "tls", 
+            tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] },
+            wsSettings: { path: "/vless" } 
+          }
+        },
+        { 
+          port: TLS_PORT, 
+          listen: '127.0.0.1', 
+          protocol: 'vless', 
+          settings: { 
+            clients: [{ id: uuid, flow: "xtls-rprx-vision" }], 
+            decryption: 'none',
+            fallbacks: [{ dest: REALITY_DEST }] 
+          },
+          streamSettings: { 
+            network: "tcp", 
+            security: "reality", 
+            realitySettings: { 
+                show: false,
+                dest: REALITY_DEST,
+                xver: 0,
+                serverNames: [REALITY_SNI],
+                privateKey: REALITY_PRIVATE_KEY, // 使用变量
+                shortIds: ["", "a1", "b2"]
+            } 
+          }
+        }
+      ],
+      outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+    }));
+
+    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+    console.log(`🚀 Core Running`);
+
+    // E. 启动 FRPC
+    if (FRPS_HOST && FRPC_REMOTE_PORT && fs.existsSync(FRPC_TAR)) {
+        console.log('📦 Unzipping FRPC...');
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
+        const frpDir = fs.readdirSync(TMP).find(name => name.startsWith('frp_') && fs.lstatSync(path.join(TMP, name)).isDirectory());
+        if (frpDir) {
+            fs.renameSync(path.join(TMP, frpDir, 'frpc'), FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
+
+            console.log(`☁️  Starting FRPC -> Local:${TLS_PORT} -> Remote:${FRPS_HOST}:${FRPC_REMOTE_PORT}`);
+            const iniContent = `
+[common]
+server_addr = ${FRPS_HOST}
+server_port = ${FRPS_PORT}
+token = ${FRPC_TOKEN}
+[node-${uuid.substring(0,5)}]
+type = tcp
+local_ip = 127.0.0.1
+local_port = ${TLS_PORT}
+remote_port = ${FRPC_REMOTE_PORT}
+`;
+            fs.writeFileSync(FRPC_CFG, iniContent);
+            spawn(FRPC_BIN, ['-c', FRPC_CFG], { stdio: 'ignore', detached: true }).unref();
+            printLink(uuid, FRPS_HOST, FRPC_REMOTE_PORT, `${LINK_NAME}-Reality`, 'reality');
+        }
+    }
+
+    // F. 启动 Argo
+    if (ARGO_TOKEN && ARGO_DOMAIN) {
+        spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
+        printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
+    } else {
+        console.log('☁️  Temp Argo Tunnel (Connecting to Local HTTPS)...');
+        const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
+        tunnel.stderr.on('data', d => {
+          const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+          if (match) printLink(uuid, match[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+        });
+    }
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  setTimeout(() => {
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+  }, 30000);
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
