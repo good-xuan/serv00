@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InnerPeace | 与自己和解</title>
+    <!-- 引入优雅的衬线字体 (Noto Serif SC) -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;500;700&family=Nunito:wght@300;400&display=swap" rel="stylesheet">
+    <!-- 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* --- 治愈系配色变量 --- */
+        :root {
+            --bg-color: #fffbf0;       /* 暖米色背景 */
+            --primary: #9b89b3;        /* 柔和淡紫 - 治愈 */
+            --secondary: #e0bbe4;      /* 浅粉紫 - 温暖 */
+            --accent: #95a5a6;         /* 沉稳灰 - 平衡 */
+            --text-main: #5d5d5d;      /* 深灰文字，不刺眼 */
+            --text-light: #888888;
+            --white: #ffffff;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Nunito', 'Noto Serif SC', serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.8;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3 { font-weight: 500; letter-spacing: 1px; }
+        
+        /* 柔和的淡入动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in { animation: fadeIn 1.2s ease-out forwards; opacity: 0; }
+        .delay-1 { animation-delay: 0.3s; }
+        .delay-2 { animation-delay: 0.6s; }
+
+        /* --- 导航 --- */
+        nav {
+            padding: 2rem 8%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        /* --- Hero 区域 --- */
+        .hero {
+            min-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 2rem;
+            position: relative;
+        }
+
+        /* 背景流动光斑 */
+        .blob {
+            position: absolute;
+            filter: blur(50px);
+            z-index: -1;
+            opacity: 0.6;
+            animation: float 10s infinite alternate;
+        }
+        .blob-1 { top: 10%; left: 20%; width: 300px; height: 300px; background: #e0bbe4; border-radius: 40% 60% 70% 30% / 40% 50% 60% 50%; }
+        .blob-2 { bottom: 20%; right: 20%; width: 250px; height: 250px; background: #d7eef7; border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; }
+
+        @keyframes float {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            100% { transform: translate(20px, 40px) rotate(10deg); }
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            margin-bottom: 1.5rem;
+            color: #4a4a4a;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-light);
+            max-width: 600px;
+            margin-bottom: 3rem;
+        }
+
+        /* 呼吸练习圆环 */
+        .breathe-circle {
+            width: 120px;
+            height: 120px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 30px rgba(155, 137, 179, 0.2);
+            position: relative;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        
+        .breathe-circle::before {
+            content: '';
+            position: absolute;
+            width: 100%; height: 100%;
+            border-radius: 50%;
+            border: 2px solid var(--primary);
+            animation: breathe 8s infinite ease-in-out;
+            opacity: 0.5;
+        }
+
+        .breathe-circle span { font-size: 0.9rem; color: var(--primary); }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.8); opacity: 0.1; }
+        }
+
+        /* --- 心路历程 Section --- */
+        .journey-section {
+            padding: 6rem 10%;
+            background: white;
+            border-radius: 50px 50px 0 0; /* 柔和的圆角过渡 */
+            box-shadow: 0 -10px 30px rgba(0,0,0,0.02);
+        }
+
+        .section-title { text-align: center; margin-bottom: 4rem; }
+        .section-title h2 { font-size: 2.2rem; color: var(--text-main); margin-bottom: 0.5rem; }
+        .section-title p { color: var(--text-light); font-style: italic; }
+
+        .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 3rem;
+        }
+
+        .step-card {
+            text-align: center;
+            padding: 2rem;
+            transition: transform 0.3s;
+        }
+        .step-card:hover { transform: translateY(-5px); }
+
+        .step-img {
+            width: 100%;
+            height: 220px;
+            border-radius: 20px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+        }
+        .step-img img { width: 100%; height: 100%; object-fit: cover; opacity: 0.9; }
+
+        .step-card h3 { font-size: 1.5rem; margin-bottom: 1rem; color: var(--primary); }
+        .step-card p { font-size: 0.95rem; color: var(--text-light); }
+
+        /* --- 自我对话 (Journaling) --- */
+        .journal-section {
+            padding: 6rem 10%;
+            background: #f4f1ea; /* 纸张色 */
+        }
+
+        .note-container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: white;
+            padding: 3rem;
+            box-shadow: 0 5px 25px rgba(0,0,0,0.05);
+            position: relative;
+            background-image: linear-gradient(#f4f1ea 1px, transparent 1px);
+            background-size: 100% 2rem; /* 信纸横线效果 */
+            line-height: 2rem;
+        }
+
+        .note-container h3 { text-align: center; margin-bottom: 2rem; color: var(--text-main); }
+
+        .note-input {
+            width: 100%;
+            border: none;
+            background: transparent;
+            font-family: 'Noto Serif SC', serif;
+            font-size: 1.1rem;
+            color: #555;
+            resize: none;
+            outline: none;
+            min-height: 200px;
+            line-height: 2rem;
+        }
+
+        .btn-save {
+            display: block;
+            margin: 2rem auto 0;
+            padding: 0.8rem 2.5rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            font-family: 'Noto Serif SC', serif;
+            transition: background 0.3s;
+        }
+        .btn-save:hover { background: #8e7ba3; }
+
+        /* --- Footer --- */
+        footer {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+
+        /* --- 响应式 --- */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.5rem; }
+            .note-container { padding: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="logo"><i class="fas fa-moon"></i> InnerPeace</div>
+        <div style="color: var(--text-light); font-size: 0.9rem;">给心灵一个拥抱</div>
+    </nav>
+
+    <!-- Hero: 氛围与呼吸 -->
+    <section class="hero">
+        <!-- 背景光斑 -->
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+
+        <h1 class="fade-in">你不必时刻完美</h1>
+        <p class="fade-in delay-1">接受自己的不完美，是通往内心平静的第一步。<br>在这里，放下防备，只做真实的自己。</p>
+        
+        <div class="breathe-circle fade-in delay-2">
+            <span>深呼吸</span>
+        </div>
+    </section>
+
+    <!-- 疗愈三部曲 -->
+    <section class="journey-section">
+        <div class="section-title">
+            <h2>和解之旅</h2>
+            <p>The Journey of Reconciliation</p>
+        </div>
+
+        <div class="steps-grid">
+            <!-- 步骤 1 -->
+            <div class="step-card">
+                <div class="step-img">
+                    <!-- 关键词：calm water (平静的水面，象征觉察) -->
+                    <img src="https://picsum.photos/seed/calm/600/400" alt="Awareness">
+                </div>
+                <h3>1. 觉察 (Awareness)</h3>
+                <p>不要评判你的情绪。无论是焦虑、悲伤还是愤怒，看见它们的存在。告诉自己：“我现在感觉有点糟，但这没关系。”</p>
+            </div>
+
+            <!-- 步骤 2 -->
+            <div class="step-card">
+                <div class="step-img">
+                    <!-- 关键词：rain (雨，象征洗刷和宽恕) -->
+                    <img src="https://picsum.photos/seed/rain/600/400" alt="Forgiveness">
+                </div>
+                <h3>2. 宽恕 (Forgiveness)</h3>
+                <p>你过去犯的错，是为了让你今天变得更智慧。原谅那个曾经笨拙、迷茫的自己，因为那时的你已经尽力了。</p>
+            </div>
+
+            <!-- 步骤 3 -->
+            <div class="step-card">
+                <div class="step-img">
+                    <!-- 关键词：sunlight (阳光，象征接纳和温暖) -->
+                    <img src="https://picsum.photos/seed/sunlight/600/400" alt="Acceptance">
+                </div>
+                <h3>3. 接纳 (Acceptance)</h3>
+                <p>拥抱你的裂痕，因为那是光照进来的地方。爱那个完整的自己——包括你的优点，和你的脆弱。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 写给自己的信 -->
+    <section class="journal-section">
+        <div class="note-container">
+            <h3>写给今天的自己</h3>
+            <!-- 模拟信纸输入框 -->
+            <textarea class="note-input" placeholder="此刻，你想对自己说什么？试着写下：“我原谅自己...” 或者 “我欣赏自己...”"></textarea>
+            <button class="btn-save" onclick="saveNote()">封存这份温柔</button>
+        </div>
+    </section>
+
+    <footer>
+        <p>&copy; 2025 InnerPeace. 愿你与世界温柔相待，首要是对自己。</p>
+    </footer>
+
+    <script>
+        // 简单的交互脚本
+        function saveNote() {
+            const input = document.querySelector('.note-input');
+            if(input.value.trim() === "") {
+                alert("试着写下几个字，哪怕只是一个“嗨”。");
+            } else {
+                alert("你的心声已被倾听。愿你今晚好梦。");
+                input.value = "（已封存）";
+                input.disabled = true;
+            }
+        }
+
+        // 图片错误处理
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                this.src = 'https://placehold.co/600x400/e0bbe4/ffffff?text=Peace';
+            };
+        });
+    </script>
+</body>
+</html>
