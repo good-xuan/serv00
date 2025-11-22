@@ -20,18 +20,31 @@ const LINK_NAME = process.env.LINK_NAME || 'Node';
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 
-// --- REALITY 配置 (在此处手动填写) ---
+// ==============================================================================
+//   REALITY 密钥配置区域 (请手动填写)
+//   提示：本地运行 xray mldsa65 可获取 Seed 和 Verify Key
+// ==============================================================================
+
+// 1. 基础 X25519 密钥 (必填)
 const REALITY_PRIVATE_KEY = process.env.REALITY_PRIVATE_KEY || 'yC7PtMJCZSJhSBt8dLMdgJStPxwHQr-tuQA5q0W59Go';
 const REALITY_PUBLIC_KEY  = process.env.REALITY_PUBLIC_KEY  || 'NtyF-w7B0fPbWuwaG99oT3TBwZwUHF_uppDiq4BYeFA';
 const REALITY_DEST = 'www.microsoft.com:443';
 const REALITY_SNI = 'www.microsoft.com';
+
+// 2. 抗量子 ML-DSA-65 密钥 (选填，留空则不启用)
+// MLDSA_SEED: 填入生成的 "Seed" (用于服务端 config.json)
+const MLDSA_SEED = process.env.MLDSA_SEED || ''; 
+// MLDSA_POV: 填入生成的 "Verify" 或 "Public" (用于客户端链接 &pqv=)
+const MLDSA_POV  = process.env.MLDSA_POV  || ''; 
+
+// ==============================================================================
 
 // --- FRPC 变量 ---
 const FRPS_HOST = process.env.FRPS_HOST || 'us.afrp.net';          
 const FRPS_PORT = process.env.FRPS_PORT || '7000';      
 const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
 const FRPC_REMOTE_PORT = process.env.FRPC_REMOTE_PORT || ''; 
-
+ 
 
 // 1. 极简 HTTP 文件服务器
 http.createServer((req, res) => {
@@ -74,7 +87,9 @@ const getFrpLatestUrl = () => new Promise((resolve) => {
 const printLink = (uuid, host, port, remarks, type) => {
   let link = '';
   if (type === 'reality') {
-    link = `vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&type=tcp&sid=&insecure=1#${remarks}`;
+    // 如果填写了 POV，则拼接到链接中
+    const pqvPart = MLDSA_POV ? `&pqv=${encodeURIComponent(MLDSA_POV)}` : '';
+    link = `vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}${pqvPart}&type=tcp&sid=&insecure=1#${remarks}`;
   } else if (type === 'argo') {
     link = `vless://${uuid}@${CDN_HOST}:443?encryption=none&security=tls&sni=${host}&fp=chrome&type=ws&path=%2Fvless#${remarks}`;
   }
@@ -108,8 +123,27 @@ const printLink = (uuid, host, port, remarks, type) => {
     fs.chmodSync(BIN, 0o755);
     fs.chmodSync(ARGO, 0o755);
 
-    // --- 写入 Xray 配置 (直接使用顶部定义的 REALITY_PRIVATE_KEY) ---
+    // --- 写入 Xray 配置 ---
     console.log(`⚙️  Configuring Xray...`);
+    
+    // 构建 realitySettings
+    const realityConfig = { 
+        show: false,
+        dest: REALITY_DEST,
+        xver: 0,
+        serverNames: [REALITY_SNI],
+        privateKey: REALITY_PRIVATE_KEY, // X25519 必填
+        shortIds: ["", "a1", "b2"]
+    };
+    
+    // 如果变量中有 ML-DSA Seed，注入到配置中
+    if (MLDSA_SEED) {
+        console.log('✨ ML-DSA-65 Post-Quantum Mode: ENABLED');
+        realityConfig.mldsa65Seed = MLDSA_SEED;
+    } else {
+        console.log('✨ ML-DSA-65 Post-Quantum Mode: DISABLED (Standard REALITY)');
+    }
+
     fs.writeFileSync(CFG, JSON.stringify({
       log: { access: 'none', error: 'none', loglevel: 'none' },
       inbounds: [
@@ -136,14 +170,7 @@ const printLink = (uuid, host, port, remarks, type) => {
           streamSettings: { 
             network: "tcp", 
             security: "reality", 
-            realitySettings: { 
-                show: false,
-                dest: REALITY_DEST,
-                xver: 0,
-                serverNames: [REALITY_SNI],
-                privateKey: REALITY_PRIVATE_KEY, // 使用变量
-                shortIds: ["", "a1", "b2"]
-            } 
+            realitySettings: realityConfig
           }
         }
       ],
@@ -185,7 +212,7 @@ remote_port = ${FRPC_REMOTE_PORT}
         spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
         printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
     } else {
-        console.log('☁️  Temp Argo Tunnel (Connecting to Local HTTPS)...');
+        console.log('☁️  Temp Argo Tunnel...');
         const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
         tunnel.stderr.on('data', d => {
           const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
