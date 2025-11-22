@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Botanica | Guardians of the Green</title>
+    <!-- 字体：Lora (优雅衬线体) 和 Poppins (现代无衬线体) -->
+    <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
+    <!-- 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* --- 核心配色与变量 --- */
+        :root {
+            --forest-green: #2d4a22;  /* 深森林绿 - 权威感 */
+            --sage-green: #8fbc8f;    /* 鼠尾草绿 - 柔和点缀 */
+            --earth: #8d6e63;         /* 泥土色 */
+            --cream-bg: #fdfbf7;      /* 米白背景 - 纸质书感 */
+            --white: #ffffff;
+            --text-main: #333333;
+            --text-light: #666666;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Poppins', sans-serif; /* 正文 */
+            background-color: var(--cream-bg);
+            color: var(--text-main);
+            line-height: 1.8;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3, h4 {
+            font-family: 'Lora', serif; /* 标题使用衬线体 */
+            color: var(--forest-green);
+        }
+
+        a { text-decoration: none; color: inherit; transition: 0.3s; }
+        img { max-width: 100%; display: block; }
+
+        /* --- 导航栏 --- */
+        nav {
+            padding: 1.5rem 10%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--cream-bg);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+        }
+
+        .logo {
+            font-family: 'Lora', serif;
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: var(--forest-green);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .nav-menu { display: flex; gap: 3rem; }
+        .nav-menu a { font-size: 0.95rem; color: var(--text-main); position: relative; }
+        
+        /* 简单的下划线动画 */
+        .nav-menu a::after {
+            content: ''; position: absolute; width: 0; height: 1px;
+            bottom: -2px; left: 0; background: var(--forest-green);
+            transition: width 0.3s;
+        }
+        .nav-menu a:hover::after { width: 100%; }
+
+        .btn-plant {
+            padding: 0.6rem 1.8rem;
+            border: 1px solid var(--forest-green);
+            border-radius: 30px;
+            color: var(--forest-green);
+            font-size: 0.9rem;
+        }
+        .btn-plant:hover { background: var(--forest-green); color: var(--white); }
+
+        /* --- Header/Hero 区域 --- */
+        .hero-wrapper {
+            position: relative;
+            height: 90vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .hero-bg {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            /* 使用 picsum 的 botanical 种子 */
+            background: url('https://picsum.photos/seed/fern/1920/1080') no-repeat center center/cover;
+            filter: brightness(0.85); /* 稍微压暗图片以便阅读 */
+        }
+
+        .hero-text {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            color: var(--white);
+            max-width: 800px;
+            padding: 2rem;
+            background: rgba(45, 74, 34, 0.6); /* 半透明深绿背景 */
+            backdrop-filter: blur(5px);
+            border-radius: 5px;
+        }
+
+        .hero-text h1 { 
+            font-size: 4rem; 
+            color: var(--white); 
+            font-style: italic; 
+            margin-bottom: 1rem;
+        }
+        
+        .hero-text p { font-size: 1.1rem; margin-bottom: 2rem; font-weight: 300; }
+
+        /* --- 为什么保护植物 (Features) --- */
+        .features { padding: 6rem 10%; background: var(--white); }
+        .section-header { text-align: center; margin-bottom: 4rem; }
+        .section-header span { color: var(--earth); letter-spacing: 2px; font-size: 0.8rem; text-transform: uppercase; }
+        .section-header h2 { font-size: 2.5rem; margin-top: 0.5rem; }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 3rem;
+        }
+
+        .feature-item { text-align: center; padding: 2rem; }
+        .icon-box {
+            width: 70px; height: 70px; margin: 0 auto 1.5rem;
+            background: #e8f5e9;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: var(--forest-green);
+            font-size: 1.5rem;
+        }
+        .feature-item h3 { font-size: 1.3rem; margin-bottom: 1rem; }
+        .feature-item p { color: var(--text-light); font-size: 0.9rem; }
+
+        /* --- 珍稀植物图鉴 (Cards) --- */
+        .gallery-section { padding: 6rem 10%; background: var(--cream-bg); }
+        
+        .plant-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .plant-card {
+            background: var(--white);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.03);
+            transition: transform 0.4s ease;
+        }
+        .plant-card:hover { transform: translateY(-10px); }
+
+        .card-img { height: 300px; overflow: hidden; position: relative; }
+        .card-img img { width: 100%; height: 100%; object-fit: cover; }
+        
+        .card-body { padding: 2rem; text-align: center; border-top: 3px solid var(--forest-green); }
+        .card-body h4 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .scientific-name { 
+            color: var(--earth); 
+            font-style: italic; 
+            font-family: 'Lora', serif; 
+            margin-bottom: 1rem; 
+            display: block;
+            font-size: 0.9rem;
+        }
+        .card-body p { font-size: 0.9rem; color: var(--text-light); margin-bottom: 1.5rem; }
+
+        .read-more { 
+            color: var(--forest-green); 
+            font-weight: 600; 
+            text-transform: uppercase; 
+            font-size: 0.8rem; 
+            letter-spacing: 1px; 
+        }
+
+        /* --- 引用/格言 --- */
+        .quote-section {
+            background: var(--forest-green);
+            color: var(--white);
+            padding: 5rem 10%;
+            text-align: center;
+        }
+        .quote-section blockquote {
+            font-family: 'Lora', serif;
+            font-size: 2rem;
+            font-style: italic;
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 1.4;
+        }
+        .quote-section cite { display: block; margin-top: 2rem; font-style: normal; opacity: 0.8; }
+
+        /* --- Footer --- */
+        footer {
+            background: #222;
+            color: #bbb;
+            padding: 3rem 10%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 2rem;
+        }
+        .footer-logo { font-family: 'Lora', serif; font-size: 1.5rem; color: white; }
+
+        /* --- 响应式 --- */
+        @media (max-width: 768px) {
+            .hero-text h1 { font-size: 2.5rem; }
+            .nav-menu { display: none; } /* Mobile menu hidden for simplicity */
+            .quote-section blockquote { font-size: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 导航 -->
+    <nav>
+        <div class="logo">
+            <i class="fas fa-seedling"></i> Botanica
+        </div>
+        <div class="nav-menu">
+            <a href="#">Our Mission</a>
+            <a href="#features">Why Plants</a>
+            <a href="#gallery">Rare Species</a>
+            <a href="#contact">Garden</a>
+        </div>
+        <a href="#" class="btn-plant">Adopt a Tree</a>
+    </nav>
+
+    <!-- Hero 区域 -->
+    <header class="hero-wrapper">
+        <div class="hero-bg"></div>
+        <div class="hero-text">
+            <h1>The Silent Guardians</h1>
+            <p>Plants are the lungs of our planet, the source of our medicine, and the foundation of all life. It's time we return the favor.</p>
+        </div>
+    </header>
+
+    <!-- 为什么保护植物 -->
+    <section id="features" class="features">
+        <div class="section-header">
+            <span>The Foundation of Life</span>
+            <h2>Why Flora Matters</h2>
+        </div>
+        <div class="feature-grid">
+            <div class="feature-item">
+                <div class="icon-box"><i class="fas fa-lungs"></i></div>
+                <h3>Oxygen & Air</h3>
+                <p>Forests absorb gigatons of carbon dioxide annually, acting as a critical buffer against climate change.</p>
+            </div>
+            <div class="feature-item">
+                <div class="icon-box"><i class="fas fa-pills"></i></div>
+                <h3>Natural Medicine</h3>
+                <p>Over 50% of all prescription drugs are derived from chemicals first identified in plants.</p>
+            </div>
+            <div class="feature-item">
+                <div class="icon-box"><i class="fas fa-home"></i></div>
+                <h3>Habitat Loss</h3>
+                <p>Plants provide the essential structure for ecosystems. Without them, wildlife has no home.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 植物图鉴 -->
+    <section id="gallery" class="gallery-section">
+        <div class="section-header">
+            <span>Biodiversity in Danger</span>
+            <h2>Rare & Remarkable</h2>
+        </div>
+
+        <div class="plant-grid">
+            <!-- 植物 1 -->
+            <div class="plant-card">
+                <div class="card-img">
+                    <!-- 种子: flower -->
+                    <img src="https://picsum.photos/seed/flower/500/600" alt="Orchid">
+                </div>
+                <div class="card-body">
+                    <h4>Ghost Orchid</h4>
+                    <span class="scientific-name">Dendrophylax lindenii</span>
+                    <p>A rare orchid that has no leaves and appears to float in the air. Critically endangered due to habitat loss.</p>
+                    <a href="#" class="read-more">Learn More</a>
+                </div>
+            </div>
+
+            <!-- 植物 2 -->
+            <div class="plant-card">
+                <div class="card-img">
+                    <!-- 种子: tree -->
+                    <img src="https://picsum.photos/seed/tree/500/600" alt="Baobab">
+                </div>
+                <div class="card-body">
+                    <h4>Baobab Tree</h4>
+                    <span class="scientific-name">Adansonia</span>
+                    <p>Known as the "Tree of Life," it stores water in its trunk. Threatened by climate change in Africa.</p>
+                    <a href="#" class="read-more">Learn More</a>
+                </div>
+            </div>
+
+            <!-- 植物 3 -->
+            <div class="plant-card">
+                <div class="card-img">
+                    <!-- 种子: leaf -->
+                    <img src="https://picsum.photos/seed/leaf/500/600" alt="Fern">
+                </div>
+                <div class="card-body">
+                    <h4>Ancient Ferns</h4>
+                    <span class="scientific-name">Polypodiopsida</span>
+                    <p>These plants have survived since the time of dinosaurs, but modern deforestation puts them at risk.</p>
+                    <a href="#" class="read-more">Learn More</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 格言区域 -->
+    <section class="quote-section">
+        <blockquote>
+            "He that plants trees loves others beside himself."
+        </blockquote>
+        <cite>— Thomas Fuller</cite>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-logo">Botanica</div>
+        <div style="font-size: 0.9rem;">
+            &copy; 2025 Botanical Conservation Society. <br>
+            Design inspired by Nature.
+        </div>
+    </footer>
+
+    <script>
+        // 滚动时的淡入效果 (Intersection Observer)
+        const observerOptions = {
+            threshold: 0.1
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = "1";
+                    entry.target.style.transform = "translateY(0)";
+                }
+            });
+        }, observerOptions);
+
+        // 给所有卡片添加简单的初始样式以便动画
+        document.querySelectorAll('.plant-card, .feature-item').forEach(el => {
+            el.style.opacity = "0";
+            el.style.transform = "translateY(20px)";
+            el.style.transition = "opacity 0.6s ease, transform 0.6s ease";
+            observer.observe(el);
+        });
+
+        // 图片错误处理
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                this.src = 'https://placehold.co/500x600/e8f5e9/2d4a22?text=Botanical+Image';
+            };
+        });
+    </script>
+</body>
+</html>
