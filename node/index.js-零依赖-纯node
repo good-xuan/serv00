@@ -1,0 +1,244 @@
+const http = require('http');
+const net = require('net');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// ================= 配置区域 =================
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3100);
+const UUID = '27848739-7e62-4138-9fd3-098a639643c9'; // 你的 UUID
+const WS_PATH = '/nodevless'; // 你的路径
+
+// WebSocket GUID 魔法字符串 (RFC 6455 标准固定值)
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+// ================= HTTP 服务 (伪装站) =================
+const server = http.createServer((req, res) => {
+    if (req.url === '/' || req.url === '/index.html') {
+        const htmlPath = path.join(__dirname, 'index.html');
+        // 如果没有 html 文件，直接返回一段文本
+        if (fs.existsSync(htmlPath)) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            fs.createReadStream(htmlPath).pipe(res);
+        } else {
+            res.writeHead(200);
+            res.end('<h1>Welcome to Native Node Server</h1>');
+        }
+    } else {
+        res.writeHead(404);
+        res.end('Not Found');
+    }
+});
+
+// ================= WebSocket 协议升级与处理 =================
+server.on('upgrade', (req, socket, head) => {
+    // 1. 检查路径
+    const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+    if (pathname !== WS_PATH) {
+        socket.destroy();
+        return;
+    }
+
+    // 2. WebSocket 握手 (Handshake)
+    const key = req.headers['sec-websocket-key'];
+    const acceptKey = crypto.createHash('sha1')
+        .update(key + WS_GUID)
+        .digest('base64');
+
+    const responseHeaders = [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${acceptKey}`,
+        '\r\n'
+    ];
+    socket.write(responseHeaders.join('\r\n'));
+
+    // 3. 处理 WebSocket 数据流
+    // 我们需要一个状态机来处理 TCP 数据包（可能粘包或分包）
+    let buffer = Buffer.alloc(0);
+    let remoteSocket = null;
+    let isVlessHeaderParsed = false;
+
+    socket.on('data', (chunk) => {
+        // 将新数据追加到缓存
+        buffer = Buffer.concat([buffer, chunk]);
+
+        // 循环处理缓存中的帧
+        while (buffer.length > 0) {
+            const frame = decodeWSFrame(buffer);
+            if (!frame) break; // 数据不够，等待下一个 chunk
+
+            // 从缓存中移除已处理的帧
+            buffer = buffer.slice(frame.frameLength);
+
+            // 处理 Payload (Opcode 1=Text, 2=Binary, 8=Close)
+            if (frame.opcode === 0x8) {
+                socket.end(); // 收到关闭帧
+                if (remoteSocket) remoteSocket.end();
+                return;
+            }
+
+            // VLESS 逻辑处理 (数据在 frame.payload 中)
+            if (!isVlessHeaderParsed) {
+                // --- VLESS 头部解析 ---
+                const msg = frame.payload;
+                if (msg.length < 17) return; // 长度不够
+
+                // 校验 UUID
+                const clientUuid = parseUuid(msg.slice(1, 17));
+                if (clientUuid !== UUID) {
+                    socket.end();
+                    return;
+                }
+
+                // 解析目标地址
+                let cursor = 17;
+                const addonsLen = msg[cursor];
+                cursor += 1 + addonsLen;
+                
+                const command = msg[cursor]; // 1=TCP
+                cursor++;
+                const remotePort = msg.readUInt16BE(cursor);
+                cursor += 2;
+                const addrType = msg[cursor];
+                cursor++;
+
+                let remoteAddr = '';
+                if (addrType === 1) { // IPv4
+                    remoteAddr = msg.slice(cursor, cursor + 4).join('.');
+                    cursor += 4;
+                } else if (addrType === 2) { // Domain
+                    const domainLen = msg[cursor];
+                    cursor++;
+                    remoteAddr = msg.slice(cursor, cursor + domainLen).toString();
+                    cursor += domainLen;
+                } else if (addrType === 3) { // IPv6
+                    remoteAddr = msg.slice(cursor, cursor + 16).toString('hex').match(/.{1,4}/g).join(':');
+                    cursor += 16;
+                }
+
+                // 连接目标
+                remoteSocket = net.createConnection(remotePort, remoteAddr, () => {
+                    // 连接成功，回复 VLESS 响应头部 0x00 0x00
+                    // 注意：必须封装在 WebSocket 帧中发回给客户端
+                    const vlessRes = Buffer.from([0, 0]);
+                    const wsFrame = encodeWSFrame(vlessRes);
+                    socket.write(wsFrame);
+
+                    // 如果握手包还有剩余数据(payload)，转发给目标
+                    if (cursor < msg.length) {
+                        remoteSocket.write(msg.slice(cursor));
+                    }
+                });
+
+                remoteSocket.on('data', (data) => {
+                    // 收到目标网站数据 -> 封装成 WS 帧 -> 发给客户端
+                    const wsFrame = encodeWSFrame(data);
+                    socket.write(wsFrame);
+                });
+
+                remoteSocket.on('error', () => socket.end());
+                remoteSocket.on('end', () => socket.end());
+
+                isVlessHeaderParsed = true;
+            } else {
+                // --- 已建立连接，直接解包转发 ---
+                if (remoteSocket && !remoteSocket.destroyed) {
+                    remoteSocket.write(frame.payload);
+                }
+            }
+        }
+    });
+
+    socket.on('error', () => { if (remoteSocket) remoteSocket.destroy(); });
+    socket.on('end', () => { if (remoteSocket) remoteSocket.destroy(); });
+});
+
+// ================= 辅助函数：解码 WebSocket 帧 =================
+function decodeWSFrame(data) {
+    if (data.length < 2) return null;
+
+    // 解析头部
+    // byte 0: FIN(1) RSV(3) Opcode(4)
+    const opcode = data[0] & 0x0f;
+    // byte 1: Mask(1) PayloadLen(7)
+    const masked = (data[1] >> 7) === 1;
+    let payloadLen = data[1] & 0x7f;
+    let offset = 2;
+
+    // 解析扩展长度
+    if (payloadLen === 126) {
+        if (data.length < 4) return null;
+        payloadLen = data.readUInt16BE(2);
+        offset += 2;
+    } else if (payloadLen === 127) {
+        if (data.length < 10) return null;
+        // JS 整数最大安全值 2^53，这里简化处理，只读后32位（通常够用）
+        payloadLen = data.readUInt32BE(6); 
+        offset += 8;
+    }
+
+    // 解析 Mask Key
+    let maskKey = null;
+    if (masked) {
+        if (data.length < offset + 4) return null;
+        maskKey = data.slice(offset, offset + 4);
+        offset += 4;
+    }
+
+    // 检查数据是否完整
+    if (data.length < offset + payloadLen) return null;
+
+    // 提取 Payload 并解码 (XOR)
+    const payload = data.slice(offset, offset + payloadLen);
+    if (masked) {
+        for (let i = 0; i < payload.length; i++) {
+            payload[i] ^= maskKey[i % 4];
+        }
+    }
+
+    return {
+        opcode,
+        payload,
+        frameLength: offset + payloadLen
+    };
+}
+
+// ================= 辅助函数：封装 WebSocket 帧 =================
+function encodeWSFrame(data) {
+    // 服务器发给客户端：FIN=1, Opcode=2(Binary), Mask=0
+    let header;
+    const len = data.length;
+
+    if (len <= 125) {
+        header = Buffer.from([0x82, len]);
+    } else if (len <= 65535) {
+        header = Buffer.alloc(4);
+        header[0] = 0x82;
+        header[1] = 126;
+        header.writeUInt16BE(len, 2);
+    } else {
+        header = Buffer.alloc(10);
+        header[0] = 0x82;
+        header[1] = 127;
+        // 简化：假设长度不超过 32位整数
+        header.writeUInt32BE(0, 2);
+        header.writeUInt32BE(len, 6);
+    }
+
+    return Buffer.concat([header, data]);
+}
+
+// ================= 辅助函数：UUID 转换 =================
+function parseUuid(buffer) {
+    const hex = buffer.toString('hex');
+    return `${hex.substr(0, 8)}-${hex.substr(8, 4)}-${hex.substr(12, 4)}-${hex.substr(16, 4)}-${hex.substr(20)}`;
+}
+
+// 启动
+server.listen(PORT, () => {
+    console.log(`Native Node VLESS Server running on port ${PORT}`);
+    console.log(`Path: ${WS_PATH}`);
+    console.log(`UUID: ${UUID}`);
+});
