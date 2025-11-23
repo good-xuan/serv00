@@ -92,10 +92,10 @@
    let link = '';
    if (type === 'xhttp') {
      // XHTTP + TLS (TCP Mapping)
-     link = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=localhost&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
+     link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
    } else if (type === 'https-domain') {
      // HTTPS Mode (Custom Domain)
-     link = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
+     link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
    } else if (type === 'argo') {
      // Argo
      link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=chrome&type=ws&path=%2Fvless#${remarks}`;
@@ -175,7 +175,7 @@
          // 2. XHTTP + TLS (Target for all FRPCs)
          {
            port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless',
-           settings: { clients: [{ id: uuid }], decryption: 'none' },
+           settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION },
            streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: "/ray" } }
          }
        ],
