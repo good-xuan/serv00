@@ -3,13 +3,17 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 // --- 基础配置 ---
 const TMP = path.join(__dirname, 'tmp'), BIN = path.join(TMP, 'web'), ARGO = path.join(TMP, 'cloudflared'), CFG = path.join(TMP, 'config.json');
 const ZIP = path.join(TMP, 'xray.zip');
-const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz'), FRPC_CFG = path.join(TMP, 'frpc.ini');
+const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz');
+// 定义两个配置文件路径
+const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
+const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
+
 const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
 const UUID_FILE = path.join(__dirname, '.uuid');
 
 // --- 端口分配 ---
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3100); // 1. WS + TLS (Argo)
-const XHTTP_PORT = PORT + 1;         // 2. XHTTP + TLS (FRPC HTTPS Target)
+const XHTTP_PORT = PORT + 1;         // 2. XHTTP + TLS (Shared Target for all FRPCs)
 const WEB_PORT = 3000;
 
 // --- 外部变量 ---
@@ -19,21 +23,27 @@ const CDN_HOST = 'cdns.doon.eu.org';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-
-// Argo 开关
 const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
-// --- FRPC 变量 ---
+// ==============================================================================
+//   FRP 服务器配置 (支持两套)
+// ==============================================================================
+
+// --- 服务器 1 ---
 const FRPS_HOST = process.env.FRPS_HOST || '';          
 const FRPS_PORT = process.env.FRPS_PORT || '7000';      
 const FRPC_TOKEN = process.env.FRPC_TOKEN || '';        
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           // HTTPS 自定域
+const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   // TCP 端口映射
 
-// FRPC HTTPS 域名配置
-// 必填：设置此域名后，FRPC 将以 https 模式启动，并将流量转发到本地 XHTTP+TLS 端口
-const FRPC_DOMAIN = process.env.FRPC_DOMAIN || ''; 
+// --- 服务器 2 (新增) ---
+const FRPS2_HOST = process.env.FRPS2_HOST || '';          
+const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
+const FRPC2_TOKEN = process.env.FRPC2_TOKEN || '';        
+const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         // HTTPS 自定域 (Server 2)
+const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; // TCP 端口映射 (Server 2)
 
-// 可选：如果你还需要一个纯 TCP 端口映射到 XHTTP+TLS，可以设置这个
-const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';
+// ==============================================================================
 
 // 1. 极简 HTTP 文件服务器
 http.createServer((req, res) => {
@@ -75,22 +85,44 @@ const getFrpLatestUrl = () => new Promise((resolve) => {
 // 4. VLESS 链接生成
 const printLink = (uuid, host, port, remarks, type) => {
   let link = '';
-  
   if (type === 'xhttp') {
-    // XHTTP + TLS (Standard TCP Mapping)
+    // XHTTP + TLS (TCP Mapping)
     link = `vless://${uuid}@${host}:${port}?encryption=none&security=tls&sni=localhost&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
   } else if (type === 'https-domain') {
-    // HTTPS Mode (Custom Domain) -> Points to XHTTP+TLS Port locally
-    // SNI 必须是 FRPC_DOMAIN
+    // HTTPS Mode (Custom Domain)
     link = `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
   } else if (type === 'argo') {
-    // Argo (WS + TLS)
+    // Argo
     link = `vless://${uuid}@${CDN_HOST}:443?encryption=none&security=tls&sni=${host}&fp=chrome&type=ws&path=%2Fvless#${remarks}`;
   }
   console.log(`\n🔗 ${remarks} Link:\n${link}\n`);
 };
 
-// 5. 主程序
+// 5. 辅助函数：启动单个 FRPC 实例
+const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
+    if (!sHost || (!sDomain && !sTcpPort)) return;
+
+    console.log(`☁️  Starting FRPC [${label}] -> ${sHost}...`);
+    let ini = `[common]\nserver_addr = ${sHost}\nserver_port = ${sPort}\ntoken = ${sToken}\n`;
+
+    // HTTPS 自定域
+    if (sDomain) {
+        ini += `\n[https-${label}-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${sDomain}\nlocal_port = ${XHTTP_PORT}\n`;
+    }
+    // TCP 端口映射
+    if (sTcpPort) {
+        ini += `\n[tcp-${label}-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${XHTTP_PORT}\nremote_port = ${sTcpPort}\n`;
+    }
+
+    fs.writeFileSync(cfgPath, ini);
+    spawn(FRPC_BIN, ['-c', cfgPath], { stdio: 'ignore', detached: true }).unref();
+
+    // 输出链接
+    if (sDomain) printLink(uuid, sDomain, 443, `${LINK_NAME}-${label}-HTTPS`, 'https-domain');
+    if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-${label}-TCP`, 'xhttp');
+};
+
+// 6. 主程序
 (async () => {
   if (!fs.existsSync(UUID_FILE)) fs.writeFileSync(UUID_FILE, 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16)));
   const uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim();
@@ -106,8 +138,11 @@ const printLink = (uuid, host, port, remarks, type) => {
     const downloadList = [download(XRAY_URL, ZIP)];
     if (ENABLE_ARGO) downloadList.push(download(ARGO_URL, ARGO));
     
-    // 只要配置了 FRPS 且 (配置了域名 或 配置了TCP端口)，就下载 FRP
-    if (FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT)) {
+    // 检查是否有任意一个 FRP 配置需要下载
+    const needFrp1 = FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
+    const needFrp2 = FRPS2_HOST && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
+
+    if (needFrp1 || needFrp2) {
         const frpUrl = await getFrpLatestUrl();
         console.log(`⏬ Downloading FRP from: ${frpUrl}`);
         downloadList.push(download(frpUrl, FRPC_TAR));
@@ -120,7 +155,7 @@ const printLink = (uuid, host, port, remarks, type) => {
     fs.chmodSync(BIN, 0o755);
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
-    // --- 写入 Xray 配置 ---
+    // --- 写入 Xray 配置 (共用入站) ---
     console.log(`⚙️  Configuring Xray...`);
     
     fs.writeFileSync(CFG, JSON.stringify({
@@ -132,7 +167,7 @@ const printLink = (uuid, host, port, remarks, type) => {
           settings: { clients: [{ id: uuid }], decryption: 'none' },
           streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: "/vless" } }
         },
-        // 2. XHTTP + TLS (Target for FRPC HTTPS Domain)
+        // 2. XHTTP + TLS (Target for all FRPCs)
         {
           port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless',
           settings: { clients: [{ id: uuid }], decryption: 'none' },
@@ -145,8 +180,8 @@ const printLink = (uuid, host, port, remarks, type) => {
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Core Running`);
 
-    // E. 启动 FRPC
-    if (FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT) && fs.existsSync(FRPC_TAR)) {
+    // E. 启动 FRPC (解压一次，启动多次)
+    if ((needFrp1 || needFrp2) && fs.existsSync(FRPC_TAR)) {
         console.log('📦 Unzipping FRPC...');
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
         const frpDir = fs.readdirSync(TMP).find(name => name.startsWith('frp_') && fs.lstatSync(path.join(TMP, name)).isDirectory());
@@ -154,30 +189,10 @@ const printLink = (uuid, host, port, remarks, type) => {
             fs.renameSync(path.join(TMP, frpDir, 'frpc'), FRPC_BIN);
             fs.chmodSync(FRPC_BIN, 0o755);
 
-            console.log(`☁️  Starting FRPC...`);
-            let iniContent = `[common]\nserver_addr = ${FRPS_HOST}\nserver_port = ${FRPS_PORT}\ntoken = ${FRPC_TOKEN}\n`;
-            
-            // HTTPS 域名模式 (Forward to XHTTP+TLS port)
-            if (FRPC_DOMAIN) {
-                iniContent += `
-[https-${uuid.substring(0,5)}]
-type = https
-custom_domains = ${FRPC_DOMAIN}
-local_port = ${XHTTP_PORT}
-`;
-            }
-
-            // (可选) 保留一个直接 TCP 映射到 XHTTP 的能力，以防万一
-            if (FRPC_XHTTP_PORT) {
-                 iniContent += `\n[tls-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${XHTTP_PORT}\nremote_port = ${FRPC_XHTTP_PORT}\n`;
-            }
-
-            fs.writeFileSync(FRPC_CFG, iniContent);
-            spawn(FRPC_BIN, ['-c', FRPC_CFG], { stdio: 'ignore', detached: true }).unref();
-            
-            // 输出 HTTPS 链接
-            if (FRPC_DOMAIN) printLink(uuid, FRPC_DOMAIN, 443, `${LINK_NAME}-HTTPS-Domain`, 'https-domain');
-            if (FRPC_XHTTP_PORT) printLink(uuid, FRPS_HOST, FRPC_XHTTP_PORT, `${LINK_NAME}-XHTTP-TCP`, 'xhttp');
+            // 启动服务器 1
+            startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG1, 'S1');
+            // 启动服务器 2
+            startFrpcInstance(uuid, FRPS2_HOST, FRPS2_PORT, FRPC2_TOKEN, FRPC2_DOMAIN, FRPC2_XHTTP_PORT, FRPC_CFG2, 'S2');
         }
     }
 
