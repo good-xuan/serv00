@@ -26,8 +26,9 @@
  const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
  //--xray变量VLESS Post-Quantum Encryption--
- const  DECRYPTION = 'mlkem768x25519plus.native.600s.5lmgb0Ypeyu3Zvk9d3RmvXCgXnd4PSF4V8EpsmdjvOPIAbabw1BJkgppX7wDcaybLAM1X8UXdfBGtKk6J6Jltg';
- const  ENCRYPTION = 'mlkem768x25519plus.native.0rtt.dxVB3MHJtOUkEgDLTzMdn-dNzdlxd3mt1MtrSYw1S5l-ILu7MNJXIoC0V_kEY1UtJntAvExx2dPB1OxX8KFffAO34UyS55xeTopfN6uvxPJZoyKQ1kRHSdaVXUYdDfJ9_6uiQmu7m-UYOPs9L9e4iCBNKKbBxsivFRJesga2ILtDc4xH1mrGOYTLo6l2zjal7pTGJ7XLnJM0L7W0MBotTUWG32CIiutWCbhgcUSiyFFTccNynCYjsJLLQbJLJSB9s7hg72Zp2otmHolhdKRhLYZEmyhCLzFfeIadHRgCbjmHj7uj8ZiU3WkDrfsfXUuGUlEqj1wSaKePwscyVYjE7FMCtWxgDai7CwcDehaj7Iam7emIWwXE2jsdAhlOWSMlKzWYerkdDmYzj_GDjguR1UKRVWigPQqS4FadePtK-LRnnoE926tvqKJJojeSnbw6RFKQuxK-Mrhr10FyFnUJzJQI_4e9cXFjFpi4CLg2PJl7GaLLMlxHPFAIePkELNFVD7xYsadNKczKrUI3v9iFHrupnQqrM-KaV1kZINW7nYFua8ORlqaS49WruarBFzeNT1GQezCniCFkBsJBDJoVt_gAI4WZy7pQlgaBUnms-8fAqBIlGMCnQLfNpEcD2QeAV3zJe-fPQumkI9tmSDJAv1BurXx3ppNxtOBfUwxw59jJTLlQ51mc45qr8SsUcNuItkVbnaQcsUahtlCBZnYJ3iUGZcopNYAcBemMVFuI-9E-_dlhQfMQt1yADoFbB3GbXrS10XQndnBQZFxe67W5nbguz5m3sPOENoN4MZlz3GlPQlScsrs7yFu8YQGDIbSvj4tm2LGsouVSEqAht7SXKqN7DSFeE7WTvrRXswvMwMbGXtsI-TaM5Kgb5Tx-xEwYNBi296U-TcgY4nAf4_YNsqwFDcpaezVuyQZv9NcwXbe0M5mZY9d0MZhuRRED0bdTEoZx_4O1zsLH6cWBkIisx5q9lsNbyHZ_lzeH28qql9iyxvWPm-J9iSHIZCmiI-YqFFGhWFVECblbdksB3-VHWWdZgfrOF5KuxVKrdBY7NMvL5yElRku_OACTEKdcB5gN4cs_OGpedMcC0siPKRPIGCK7zMS2XyVIocM0rcHEabvKMLURrrVqamRSeVNTfQN-kNarUxdKMtaFVvVGTeAmLsyfrwodhqrEqDW-LUqEEdsQpnWOicYFppYMo-a3VhqNBmiesVezBBiXycDCeFQNeZLHI5gm4fOEcuhRs7WLTOY1RAknKNlEy8SoCuKlZNFOR7Gg8OUjxmYmLlmBkmlqSYkHvWh7KwaiZ3KQNdo7eZB5LyW7SvSdDuEj7tcPn3SBQpBRozrMJsWcushVK5LMn4sROLq-v2gQ3lWDuxWjPWUEA6C2blVT9ZtvpOUGJSss7ZES3iqDhbA2A3q-PQu-O_eQdoUJUWGivpcB70oYVMAc1oqPkJYHPOJtP0Y6HAeyoLq1XFScG2TLmwgnI7BoLadWi1bE2_uHXKKNquF8sDKr23g8ThMn0Fsg1etVVmIvnicoKqu77zQg7P3jx8dxVy4zG0eHY8YwhDwACrncDEs';
+//必须手动填写
+ const  DECRYPTION = 'mlkem768';
+ const  ENCRYPTION = '';
  // ==============================================================================
  //   FRP 服务器配置 (支持两套)
  // ==============================================================================
