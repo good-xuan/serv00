@@ -9,7 +9,10 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
 
  const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
+ 
+ // 持久化文件路径
  const UUID_FILE = path.join(__dirname, '.uuid');
+ const KEYS_FILE = path.join(__dirname, '.keys');
 
  // --- 端口分配 ---
  const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3100); // 1. WS + TLS (Argo)
@@ -26,7 +29,7 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
  // ==============================================================================
- //   UUID 处理逻辑 (已移至开头)
+ //   UUID 处理逻辑
  //   1. 优先使用环境变量 process.env.UUID
  //   2. 如果没有，尝试读取本地缓存文件
  //   3. 如果还是没有，则自动生成一个新的并保存
@@ -44,15 +47,26 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
      console.log(`✅ Using UUID: ${uuid}`);
  }
 
- // 尝试保存到文件
+ // 尝试保存 UUID
  try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
  // ==============================================================================
- //   VLESS Post-Quantum Encryption 变量
- //   逻辑：优先读取环境变量 -> 其次读取此处硬编码 -> 如果均为空，后续会自动生成
+ //   VLESS Post-Quantum Encryption 变量处理逻辑
+ //   1. 优先读取环境变量
+ //   2. 其次读取本地持久化文件 (.keys)
+ //   3. 如果均为空，将在后续 Xray 下载完成后自动生成并保存
  // ==============================================================================
  let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
  let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+
+ if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+    try {
+        const storedKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+        if (!DECRYPTION) DECRYPTION = storedKeys.decryption || '';
+        if (!ENCRYPTION) ENCRYPTION = storedKeys.encryption || '';
+        if (DECRYPTION && ENCRYPTION) console.log('✅ Loaded ML-KEM Keys from file.');
+    } catch (e) {}
+ }
 
  // ==============================================================================
  //   FRP 服务器配置 (支持两套)
@@ -182,12 +196,12 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
      if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
      // ======================================================
-     // [逻辑] 检查自定义密钥 -> 如果没有，则自动生成 ML-KEM-768
+     // [逻辑] 密钥检查 -> 自动生成 -> 自动保存
      // ======================================================
      if (DECRYPTION && ENCRYPTION) {
-         console.log('✅ Using Custom ML-KEM-768 Keys.');
+         console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
      } else {
-         console.log('🔑 Custom keys missing. Generating ML-KEM-768 Keys...');
+         console.log('🔑 Keys missing. Generating new ML-KEM-768 Keys...');
          try {
             const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
             // 正则匹配 ML-KEM-768 部分
@@ -197,9 +211,15 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
             if (match && match[1] && match[2]) {
                 DECRYPTION = match[1]; // 私钥
                 ENCRYPTION = match[2]; // 公钥
-                console.log(`✅ Keys Generated (ML-KEM-768). Public Key: ${ENCRYPTION.substring(0, 10)}...`);
+                console.log(`✅ Keys Generated. Public Key: ${ENCRYPTION.substring(0, 10)}...`);
+                
+                // 自动保存新生成的密钥到文件
+                try {
+                    fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION }));
+                } catch(err) { console.warn('⚠️ Could not save keys to file.'); }
+
             } else {
-                console.warn('⚠️ Failed to parse ML-KEM-768 keys from output. (Xray version too old?)');
+                console.warn('⚠️ Failed to parse ML-KEM-768 keys from output.');
             }
          } catch (keyErr) {
              console.error('⚠️ Error generating keys:', keyErr.message);
@@ -269,7 +289,6 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
    setTimeout(() => {
      if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
-     console.clear();
      console.log('🧹 Cleaned up');
    }, 30000);
    setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
