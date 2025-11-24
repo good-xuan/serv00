@@ -26,6 +26,28 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
  // ==============================================================================
+ //   UUID 处理逻辑 (已移至开头)
+ //   1. 优先使用环境变量 process.env.UUID
+ //   2. 如果没有，尝试读取本地缓存文件
+ //   3. 如果还是没有，则自动生成一个新的并保存
+ // ==============================================================================
+ let uuid = process.env.UUID || '';
+
+ if (!uuid && fs.existsSync(UUID_FILE)) {
+     try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {}
+ }
+
+ if (!uuid) {
+     uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+     console.log(`🆕 Generated New UUID: ${uuid}`);
+ } else {
+     console.log(`✅ Using UUID: ${uuid}`);
+ }
+
+ // 尝试保存到文件
+ try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+ // ==============================================================================
  //   VLESS Post-Quantum Encryption 变量
  //   逻辑：优先读取环境变量 -> 其次读取此处硬编码 -> 如果均为空，后续会自动生成
  // ==============================================================================
@@ -131,9 +153,6 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
  // 6. 主程序
  (async () => {
-   if (!fs.existsSync(UUID_FILE)) fs.writeFileSync(UUID_FILE, 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16)));
-   const uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim();
-
    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
    fs.mkdirSync(TMP, { recursive: true });
 
