@@ -92,13 +92,13 @@
    let link = '';
    if (type === 'xhttp') {
      // XHTTP + TLS (TCP Mapping)
-     link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
+     link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
    } else if (type === 'https-domain') {
      // HTTPS Mode (Custom Domain)
-     link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=chrome&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
+     link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=%2Fray&insecure=1#${remarks}`;
    } else if (type === 'argo') {
      // Argo
-     link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=chrome&type=ws&path=%2Fvless#${remarks}`;
+     link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=ws&path=%2Fvless#${remarks}`;
    }
    console.log(`\n🔗 ${remarks} Link:\n${link}\n`);
  };
