@@ -289,6 +289,7 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
    setTimeout(() => {
      if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+     console.clear();
      console.log('🧹 Cleaned up');
    }, 30000);
    setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
