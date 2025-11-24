@@ -25,10 +25,12 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
  const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
- //--xray变量VLESS Post-Quantum Encryption--
- // 改为 let 以便自动生成后覆盖
- let DECRYPTION = ''; 
- let ENCRYPTION = '';
+ // ==============================================================================
+ //   VLESS Post-Quantum Encryption 变量
+ //   逻辑：优先读取环境变量 -> 其次读取此处硬编码 -> 如果均为空，后续会自动生成
+ // ==============================================================================
+ let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
+ let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
 
  // ==============================================================================
  //   FRP 服务器配置 (支持两套)
@@ -161,29 +163,28 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
      if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
      // ======================================================
-     // [修正] 自动生成 ML-KEM-768 密钥对
+     // [逻辑] 检查自定义密钥 -> 如果没有，则自动生成 ML-KEM-768
      // ======================================================
-     console.log('🔑 Generating ML-KEM-768 Keys...');
-     try {
-        const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
-        
-        // 正则解释:
-        // 1. 找到 "Authentication: ML-KEM-768" 标题
-        // 2. 跨行匹配直到找到 "decryption": "..."
-        // 3. 跨行匹配直到找到 "encryption": "..."
-        // [\s\S]+? 是非贪婪的跨行匹配
-        const regex = /Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/;
-        const match = cmdOut.match(regex);
+     if (DECRYPTION && ENCRYPTION) {
+         console.log('✅ Using Custom ML-KEM-768 Keys.');
+     } else {
+         console.log('🔑 Custom keys missing. Generating ML-KEM-768 Keys...');
+         try {
+            const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+            // 正则匹配 ML-KEM-768 部分
+            const regex = /Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/;
+            const match = cmdOut.match(regex);
 
-        if (match && match[1] && match[2]) {
-            DECRYPTION = match[1]; // 私钥
-            ENCRYPTION = match[2]; // 公钥
-            console.log(`✅ Keys Generated (ML-KEM-768). Public Key: ${ENCRYPTION.substring(0, 10)}...`);
-        } else {
-            console.warn('⚠️ Failed to parse ML-KEM-768 keys from output.');
-        }
-     } catch (keyErr) {
-         console.error('⚠️ Error generating keys:', keyErr.message);
+            if (match && match[1] && match[2]) {
+                DECRYPTION = match[1]; // 私钥
+                ENCRYPTION = match[2]; // 公钥
+                console.log(`✅ Keys Generated (ML-KEM-768). Public Key: ${ENCRYPTION.substring(0, 10)}...`);
+            } else {
+                console.warn('⚠️ Failed to parse ML-KEM-768 keys from output. (Xray version too old?)');
+            }
+         } catch (keyErr) {
+             console.error('⚠️ Error generating keys:', keyErr.message);
+         }
      }
      // ======================================================
 
