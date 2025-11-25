@@ -23,7 +23,7 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  // --- 外部变量 ---
  const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
  const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
- const CDN_HOST = 'cdns.doon.eu.org';
+ const CDN_HOST = 'www.visa.com.sg';
  const LINK_NAME = process.env.LINK_NAME || 'Node'; 
  const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
  const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
