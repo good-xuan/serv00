@@ -25,7 +25,7 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
  // --- 外部变量 ---
  const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
  const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
- const CDN_HOST = 'cdns.doon.eu.org';
+ const CDN_HOST = 'www.visa.com.sg';
  const LINK_NAME = process.env.LINK_NAME || 'Node'; 
  const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
  const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
@@ -280,7 +280,7 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
      // F. Argo 处理 (逻辑调整：有域名就打印链接，不论是否运行)
      if (ARGO_DOMAIN) {
-         printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Fixed`, 'argo');
+         printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
      }
 
      // 只有当 ENABLE_ARGO 为 true 时，才尝试启动 Argo 进程
