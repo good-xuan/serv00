@@ -1,0 +1,332 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// --- 基础配置 ---
+const TMP = path.join(__dirname, 'tmp'), BIN = path.join(TMP, 'web'), ARGO = path.join(TMP, 'cloudflared'), CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz');
+const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
+const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
+const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
+
+// --- 持久化文件 ---
+const UUID_FILE = path.join(__dirname, '.uuid');
+const KEYS_FILE = path.join(__dirname, '.keys');
+const PATHS_FILE = path.join(__dirname, '.paths');
+const SHARE_PATH = path.join(__dirname, 'share');
+
+// --- 端口分配 ---
+// WEB_PORT: 优先环境变量 (适配 PaaS), 默认 3000
+const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
+// PORT: Xray 核心端口 (固定 3100)
+const PORT = 3100;
+const XHTTP_PORT = PORT + 1;
+
+// --- 外部变量 ---
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+const CDN_HOST = 'www.visa.com.sg';
+const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
+
+// ==============================================================================
+//   初始化
+// ==============================================================================
+
+// 0. 确保 share 目录
+if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
+
+// 1. UUID
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+}
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// 2. Path
+let WS_PATH = process.env.WS_PATH || '';
+let XHTTP_PATH = process.env.XHTTP_PATH || '';
+if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
+    try {
+        const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8'));
+        if (!WS_PATH) WS_PATH = storedPaths.ws || '';
+        if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
+    } catch(e) {}
+}
+const genPath = () => '/' + Math.random().toString(36).substring(2, 8);
+if (!WS_PATH) WS_PATH = genPath();
+if (!XHTTP_PATH) XHTTP_PATH = genPath();
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// 3. Keys
+let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
+let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+   try {
+       const storedKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+       if (!DECRYPTION) DECRYPTION = storedKeys.decryption || '';
+       if (!ENCRYPTION) ENCRYPTION = storedKeys.encryption || '';
+   } catch (e) {}
+}
+
+// ==============================================================================
+//   FRP 配置
+// ==============================================================================
+const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
+const FRPS_PORT = process.env.FRPS_PORT || '7000';      
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
+const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
+
+const FRPS2_HOST = process.env.FRPS2_HOST || 'uss.afrp.net';          
+const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
+const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';        
+const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
+const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
+
+// ==============================================================================
+//   WEB SERVER: 保护海洋主题
+// ==============================================================================
+
+const getHtml = (fileList) => `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protect the Ocean</title>
+    <style>
+        :root { --bg-top: #001e3c; --bg-bottom: #023e8a; --card-bg: rgba(255, 255, 255, 0.08); --text-primary: #caf0f8; --text-secondary: #90e0ef; --accent: #00b4d8; --btn-bg: #48cae4; --btn-text: #03045e; --border: rgba(144, 224, 239, 0.2); }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%); color: var(--text-primary); margin: 0; padding: 40px 20px; display: flex; justify-content: center; min-height: 100vh; box-sizing: border-box; }
+        .container { max-width: 800px; width: 100%; animation: fadeIn 1s ease-in; }
+        .hero { text-align: center; margin-bottom: 40px; }
+        .hero h1 { font-size: 2.5em; margin: 0 0 10px 0; text-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .hero p { color: var(--text-secondary); font-size: 1.1em; margin: 0; line-height: 1.5; }
+        .card { background: var(--card-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 16px; padding: 30px; border: 1px solid var(--border); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3); }
+        h2 { margin-top: 0; color: var(--accent); display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; font-weight: 600; }
+        .file-list { list-style: none; padding: 0; margin: 0; }
+        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid var(--border); transition: background 0.3s; border-radius: 8px; }
+        .file-item:hover { background: rgba(255, 255, 255, 0.05); }
+        .file-item:last-child { border-bottom: none; }
+        .file-info { display: flex; align-items: center; gap: 10px; }
+        .file-name { font-weight: 500; letter-spacing: 0.5px; }
+        a.btn { background: var(--btn-bg); color: var(--btn-text); text-decoration: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9em; transition: all 0.3s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        a.btn:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); filter: brightness(1.1); }
+        .empty { padding: 30px; text-align: center; opacity: 0.6; font-style: italic; color: var(--text-secondary); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>🌊 Protect Our Oceans</h1>
+            <p>The ocean is the heart of our planet. Keep it blue, keep it clean.</p>
+        </div>
+        <div class="card">
+            <h2>📂 Shared Resources <small style="font-size:0.5em; opacity:0.6; font-weight:normal; margin-left:auto; color:var(--text-secondary);">(./share)</small></h2>
+            ${fileList.length > 0 ? `<ul class="file-list">${fileList.map(f => `
+                <li class="file-item">
+                    <div class="file-info"><span style="font-size:1.2em">📄</span><span class="file-name">${f}</span></div>
+                    <a href="/download/${f}" class="btn">Download</a>
+                </li>`).join('')}</ul>` : '<div class="empty">No files in the ocean (share folder is empty) 🐋</div>'}
+        </div>
+        <div style="text-align:center; margin-top:30px; font-size:0.8em; opacity:0.5;">🌍 Every drop counts.</div>
+    </div>
+</body>
+</html>
+`;
+
+http.createServer((req, res) => {
+   const url = new URL(req.url, `http://${req.headers.host}`);
+   
+   if (url.pathname === '/') {
+       let files = [];
+       try {
+           if (fs.existsSync(SHARE_PATH)) {
+                files = fs.readdirSync(SHARE_PATH).filter(f => {
+                    try { return fs.statSync(path.join(SHARE_PATH, f)).isFile(); } catch(e) { return false; }
+                });
+           }
+       } catch (e) {}
+       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+       res.end(getHtml(files));
+       return;
+   }
+
+   if (url.pathname.startsWith('/download/')) {
+       const filename = decodeURIComponent(url.pathname.replace('/download/', ''));
+       if (filename.includes('..') || filename.includes('/')) {
+           res.writeHead(403); res.end('Forbidden'); return;
+       }
+       const filePath = path.join(SHARE_PATH, filename);
+       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+           res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+           fs.createReadStream(filePath).pipe(res);
+       } else {
+           res.writeHead(404); res.end('File not found');
+       }
+       return;
+   }
+   res.writeHead(404); res.end('Not Found');
+}).listen(WEB_PORT, () => {
+    console.log(`\n🌊 Ocean Theme Server running at: http://localhost:${WEB_PORT} (Serving ./share)\n`);
+});
+
+// ==============================================================================
+//   工具与主程序
+// ==============================================================================
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+const getFrpLatestUrl = () => new Promise((resolve) => {
+    https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        const loc = res.headers.location;
+        if (loc) {
+            const tag = path.basename(loc); 
+            const ver = tag.startsWith('v') ? tag.slice(1) : tag; 
+            resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${ver}_linux_amd64.tar.gz`);
+        } else {
+            resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz');
+        }
+    }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
+});
+
+const printLink = (uuid, host, port, remarks, type) => {
+  let link = '';
+  if (type === 'xhttp') {
+    link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  } else if (type === 'https-domain') {
+    link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  } else if (type === 'argo') {
+    link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=ws&path=${encodeURIComponent(WS_PATH)}#${remarks}`;
+  }
+  console.log(`\n🔗 ${remarks} Link:\n${link}\n`);
+};
+
+const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
+    if (!sHost || (!sDomain && !sTcpPort)) return;
+    console.log(`☁️  Starting FRPC [${label}] -> ${sHost}...`);
+    let ini = `[common]\nserver_addr = ${sHost}\nserver_port = ${sPort}\ntoken = ${sToken}\n`;
+    if (sDomain) ini += `\n[https-${label}-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${sDomain}\nlocal_port = ${XHTTP_PORT}\n`;
+    if (sTcpPort) ini += `\n[tcp-${label}-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${XHTTP_PORT}\nremote_port = ${sTcpPort}\n`;
+    fs.writeFileSync(cfgPath, ini);
+    spawn(FRPC_BIN, ['-c', cfgPath], { stdio: 'ignore', detached: true }).unref();
+    if (sDomain) printLink(uuid, sDomain, 443, `${LINK_NAME}-${label}-HTTPS`, 'https-domain');
+    if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-${label}-TCP`, 'xhttp');
+};
+
+(async () => {
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    console.log('🔐 Generating self-signed certificates...');
+    execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
+
+    console.log('⏳ Downloading binaries...');
+    const downloadList = [download(XRAY_URL, ZIP)];
+    if (ENABLE_ARGO) downloadList.push(download(ARGO_URL, ARGO));
+    const needFrp1 = FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
+    const needFrp2 = FRPS2_HOST && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
+    if (needFrp1 || needFrp2) {
+        const frpUrl = await getFrpLatestUrl();
+        console.log(`⏬ Downloading FRP from: ${frpUrl}`);
+        downloadList.push(download(frpUrl, FRPC_TAR));
+    }
+    await Promise.all(downloadList);
+
+    console.log('📦 Unzipping Xray...');
+    execSync(`unzip -o ${ZIP} -d ${TMP}`);
+    fs.renameSync(path.join(TMP, 'xray'), BIN);
+    fs.chmodSync(BIN, 0o755);
+    if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
+
+    if (DECRYPTION && ENCRYPTION) {
+        console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
+    } else {
+        console.log('🔑 Keys missing. Generating new ML-KEM-768 Keys...');
+        try {
+           const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+           const regex = /Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/;
+           const match = cmdOut.match(regex);
+           if (match && match[1] && match[2]) {
+               DECRYPTION = match[1]; ENCRYPTION = match[2];
+               console.log(`✅ Keys Generated. Public Key: ${ENCRYPTION.substring(0, 10)}...`);
+               try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+           }
+        } catch (keyErr) {}
+    }
+
+    console.log(`⚙️  Configuring Xray...`);
+    fs.writeFileSync(CFG, JSON.stringify({
+      log: { access: 'none', error: 'none', loglevel: 'none' },
+      inbounds: [
+        { 
+          port: PORT, protocol: 'vless', 
+          settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION },
+          streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } }
+        },
+        {
+          port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless',
+          settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION },
+          streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } }
+        }
+      ],
+      outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+    }));
+
+    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+    console.log(`🚀 Core Running on ${PORT}`);
+
+    if ((needFrp1 || needFrp2) && fs.existsSync(FRPC_TAR)) {
+        console.log('📦 Unzipping FRPC...');
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
+        const frpDir = fs.readdirSync(TMP).find(name => name.startsWith('frp_') && fs.lstatSync(path.join(TMP, name)).isDirectory());
+        if (frpDir) {
+            fs.renameSync(path.join(TMP, frpDir, 'frpc'), FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
+            startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG1, 'S1');
+            startFrpcInstance(uuid, FRPS2_HOST, FRPS2_PORT, FRPC2_TOKEN, FRPC2_DOMAIN, FRPC2_XHTTP_PORT, FRPC_CFG2, 'S2');
+        }
+    }
+
+    if (ENABLE_ARGO) {
+        if (ARGO_TOKEN && ARGO_DOMAIN) {
+            spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
+            printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
+        } else {
+            console.log('☁️  Temp Argo Tunnel...');
+            const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            tunnel.stderr.on('data', d => {
+              const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+              if (match) printLink(uuid, match[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+            });
+        }
+    }
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  setTimeout(() => {
+    process.stdout.write('\033c');
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+    console.log(`\n🌊 Ocean Theme Server running at: http://localhost:${WEB_PORT}\n`);
+  }, 30000);
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
+// END OF FILE
