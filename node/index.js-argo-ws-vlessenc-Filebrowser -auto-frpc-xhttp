@@ -218,7 +218,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     execSync(`${FB_BIN} config init --database ${FB_DB}`);
     // (2) 设置端口和根目录
     // 0.0.0.0 确保外网可访问
-    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
+    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --locale zh-CN --database ${FB_DB}`);
     // (3) 添加管理员用户
     execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
     // ------------------------------------------
