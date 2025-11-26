@@ -1,21 +1,27 @@
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
 
 // --- 基础配置 ---
-const TMP = path.join(__dirname, 'tmp'), BIN = path.join(TMP, 'web'), ARGO = path.join(TMP, 'cloudflared'), CFG = path.join(TMP, 'config.json');
+const TMP = path.join(__dirname, 'tmp');
+const BIN = path.join(TMP, 'web');      // Xray Binary
+const DUFS_BIN = path.join(TMP, 'dufs'); // Dufs Binary
+const ARGO = path.join(TMP, 'cloudflared');
+const CFG = path.join(TMP, 'config.json');
 const ZIP = path.join(TMP, 'xray.zip');
+const DUFS_TAR = path.join(TMP, 'dufs.tar.gz');
 const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz');
 const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
 const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
 const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
 
-// --- 持久化文件 ---
+// --- 持久化文件路径 ---
 const UUID_FILE = path.join(__dirname, '.uuid');
+const PASSWORD_FILE = path.join(__dirname, '.password'); // 新增：密码持久化文件
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 const SHARE_PATH = path.join(__dirname, 'share');
 
 // --- 端口分配 ---
-// WEB_PORT: 优先环境变量 (适配 PaaS), 默认 3000
+// WEB_PORT: Dufs 文件服务端口 (优先环境变量)
 const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
 // PORT: Xray 核心端口 (固定 3100)
 const PORT = 3100;
@@ -31,21 +37,40 @@ const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
 
 // ==============================================================================
-//   初始化
+//   初始化逻辑
 // ==============================================================================
 
 // 0. 确保 share 目录
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
-// 1. UUID
+// 1. UUID 处理逻辑 (Env -> File -> Random)
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!uuid) {
     uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
-}
+    console.log(`🆕 Generated New UUID: ${uuid}`);
+} else { console.log(`✅ Using UUID: ${uuid}`); }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
-// 2. Path
+// 2. Web 密码处理逻辑 (Env -> File -> Random)
+const WEB_USER = process.env.WEB_USER || 'admin';
+let WEB_PASSWORD = process.env.WEB_PASSWORD || '';
+if (!WEB_PASSWORD && fs.existsSync(PASSWORD_FILE)) { 
+    try { WEB_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} 
+}
+if (!WEB_PASSWORD) {
+    // 生成 16 位随机字符 (大小写+数字)
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < 16; i++) {
+        WEB_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    console.log(`🆕 Generated New Web Password: ${WEB_PASSWORD}`);
+} else { 
+    console.log(`✅ Using Web Password: ${WEB_PASSWORD.substring(0,3)}***`); 
+}
+try { fs.writeFileSync(PASSWORD_FILE, WEB_PASSWORD); } catch(e) {}
+
+// 3. Path 处理逻辑
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
 if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
@@ -60,7 +85,7 @@ if (!WS_PATH) WS_PATH = genPath();
 if (!XHTTP_PATH) XHTTP_PATH = genPath();
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
-// 3. Keys
+// 4. ML-KEM Keys 处理逻辑
 let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
 let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
 if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
@@ -87,95 +112,7 @@ const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';
 const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
 
 // ==============================================================================
-//   WEB SERVER: 保护海洋主题
-// ==============================================================================
-
-const getHtml = (fileList) => `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protect the Ocean</title>
-    <style>
-        :root { --bg-top: #001e3c; --bg-bottom: #023e8a; --card-bg: rgba(255, 255, 255, 0.08); --text-primary: #caf0f8; --text-secondary: #90e0ef; --accent: #00b4d8; --btn-bg: #48cae4; --btn-text: #03045e; --border: rgba(144, 224, 239, 0.2); }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%); color: var(--text-primary); margin: 0; padding: 40px 20px; display: flex; justify-content: center; min-height: 100vh; box-sizing: border-box; }
-        .container { max-width: 800px; width: 100%; animation: fadeIn 1s ease-in; }
-        .hero { text-align: center; margin-bottom: 40px; }
-        .hero h1 { font-size: 2.5em; margin: 0 0 10px 0; text-shadow: 0 2px 4px rgba(0,0,0,0.3); }
-        .hero p { color: var(--text-secondary); font-size: 1.1em; margin: 0; line-height: 1.5; }
-        .card { background: var(--card-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 16px; padding: 30px; border: 1px solid var(--border); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3); }
-        h2 { margin-top: 0; color: var(--accent); display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; font-weight: 600; }
-        .file-list { list-style: none; padding: 0; margin: 0; }
-        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid var(--border); transition: background 0.3s; border-radius: 8px; }
-        .file-item:hover { background: rgba(255, 255, 255, 0.05); }
-        .file-item:last-child { border-bottom: none; }
-        .file-info { display: flex; align-items: center; gap: 10px; }
-        .file-name { font-weight: 500; letter-spacing: 0.5px; }
-        a.btn { background: var(--btn-bg); color: var(--btn-text); text-decoration: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9em; transition: all 0.3s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        a.btn:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); filter: brightness(1.1); }
-        .empty { padding: 30px; text-align: center; opacity: 0.6; font-style: italic; color: var(--text-secondary); }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="hero">
-            <h1>🌊 Protect Our Oceans</h1>
-            <p>The ocean is the heart of our planet. Keep it blue, keep it clean.</p>
-        </div>
-        <div class="card">
-            <h2>📂 Shared Resources <small style="font-size:0.5em; opacity:0.6; font-weight:normal; margin-left:auto; color:var(--text-secondary);">(./share)</small></h2>
-            ${fileList.length > 0 ? `<ul class="file-list">${fileList.map(f => `
-                <li class="file-item">
-                    <div class="file-info"><span style="font-size:1.2em">📄</span><span class="file-name">${f}</span></div>
-                    <a href="/download/${f}" class="btn">Download</a>
-                </li>`).join('')}</ul>` : '<div class="empty">No files in the ocean (share folder is empty) 🐋</div>'}
-        </div>
-        <div style="text-align:center; margin-top:30px; font-size:0.8em; opacity:0.5;">🌍 Every drop counts.</div>
-    </div>
-</body>
-</html>
-`;
-
-http.createServer((req, res) => {
-   const url = new URL(req.url, `http://${req.headers.host}`);
-   
-   if (url.pathname === '/') {
-       let files = [];
-       try {
-           if (fs.existsSync(SHARE_PATH)) {
-                files = fs.readdirSync(SHARE_PATH).filter(f => {
-                    try { return fs.statSync(path.join(SHARE_PATH, f)).isFile(); } catch(e) { return false; }
-                });
-           }
-       } catch (e) {}
-       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-       res.end(getHtml(files));
-       return;
-   }
-
-   if (url.pathname.startsWith('/download/')) {
-       const filename = decodeURIComponent(url.pathname.replace('/download/', ''));
-       if (filename.includes('..') || filename.includes('/')) {
-           res.writeHead(403); res.end('Forbidden'); return;
-       }
-       const filePath = path.join(SHARE_PATH, filename);
-       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-           res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-           fs.createReadStream(filePath).pipe(res);
-       } else {
-           res.writeHead(404); res.end('File not found');
-       }
-       return;
-   }
-   res.writeHead(404); res.end('Not Found');
-}).listen(WEB_PORT, () => {
-    console.log(`\n🌊 Ocean Theme Server running at: http://localhost:${WEB_PORT} (Serving ./share)\n`);
-});
-
-// ==============================================================================
-//   工具与主程序
+//   工具函数
 // ==============================================================================
 
 const download = (url, dest) => new Promise((resolve, reject) => {
@@ -191,6 +128,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
   }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
+// 获取 FRP 最新版
 const getFrpLatestUrl = () => new Promise((resolve) => {
     https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
         const loc = res.headers.location;
@@ -202,6 +140,17 @@ const getFrpLatestUrl = () => new Promise((resolve) => {
             resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz');
         }
     }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
+});
+
+// 获取 Dufs 最新版
+const getDufsLatestUrl = () => new Promise((resolve) => {
+    console.log('🔍 Checking latest Dufs version...');
+    https.get('https://github.com/sigoden/dufs/releases/latest', (res) => {
+        const loc = res.headers.location;
+        const tag = loc ? path.basename(loc) : 'v0.43.0';
+        const ver = tag.replace('v', '');
+        resolve(`https://github.com/sigoden/dufs/releases/download/${tag}/dufs-v${ver}-x86_64-unknown-linux-musl.tar.gz`);
+    }).on('error', () => resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'));
 });
 
 const printLink = (uuid, host, port, remarks, type) => {
@@ -228,6 +177,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-${label}-TCP`, 'xhttp');
 };
 
+// ==============================================================================
+//   Main
+// ==============================================================================
+
 (async () => {
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
@@ -237,8 +190,13 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
 
     console.log('⏳ Downloading binaries...');
-    const downloadList = [download(XRAY_URL, ZIP)];
+    const dufsUrl = await getDufsLatestUrl();
+    const downloadList = [
+        download(XRAY_URL, ZIP),
+        download(dufsUrl, DUFS_TAR)
+    ];
     if (ENABLE_ARGO) downloadList.push(download(ARGO_URL, ARGO));
+    
     const needFrp1 = FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
     const needFrp2 = FRPS2_HOST && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
     if (needFrp1 || needFrp2) {
@@ -248,12 +206,27 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     }
     await Promise.all(downloadList);
 
+    // 1. Xray
     console.log('📦 Unzipping Xray...');
     execSync(`unzip -o ${ZIP} -d ${TMP}`);
     fs.renameSync(path.join(TMP, 'xray'), BIN);
     fs.chmodSync(BIN, 0o755);
+    
+    // 2. Dufs
+    console.log(`📦 Unzipping Dufs...`);
+    execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`);
+    const dufsFile = fs.readdirSync(TMP).find(n => n === 'dufs' || n.startsWith('dufs-'));
+    if (dufsFile) {
+        const srcPath = path.join(TMP, dufsFile);
+        if (!fs.lstatSync(srcPath).isDirectory()) {
+             fs.renameSync(srcPath, DUFS_BIN);
+        }
+    }
+    fs.chmodSync(DUFS_BIN, 0o755);
+
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
+    // 3. Keys
     if (DECRYPTION && ENCRYPTION) {
         console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
     } else {
@@ -270,6 +243,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         } catch (keyErr) {}
     }
 
+    // 4. Xray Run
     console.log(`⚙️  Configuring Xray...`);
     fs.writeFileSync(CFG, JSON.stringify({
       log: { access: 'none', error: 'none', loglevel: 'none' },
@@ -287,10 +261,24 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
       ],
       outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
     }));
-
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
-    console.log(`🚀 Core Running on ${PORT}`);
+    console.log(`🚀 Xray Running on ${PORT}`);
 
+    // 5. Dufs Run (With Persistent Auth + -A)
+    console.log(`📂 Starting Dufs on port ${WEB_PORT}...`);
+    // 参数: -p 端口, -A 允许所有操作(开启高级功能)
+    const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '-A'];
+    
+    // 如果存在用户名密码，添加认证规则: user:pass@/:rw
+    // 这会强制根目录及子目录必须登录才能拥有 rw 权限
+    if (WEB_USER && WEB_PASSWORD) {
+        console.log(`🔒 Basic Auth Enabled: ${WEB_USER} / ${WEB_PASSWORD.substring(0,3)}***`);
+        dufsArgs.push('-a', `${WEB_USER}:${WEB_PASSWORD}@/:rw`);
+    }
+    
+    spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
+
+    // 6. FRP
     if ((needFrp1 || needFrp2) && fs.existsSync(FRPC_TAR)) {
         console.log('📦 Unzipping FRPC...');
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
@@ -303,6 +291,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         }
     }
 
+    // 7. Argo
     if (ENABLE_ARGO) {
         if (ARGO_TOKEN && ARGO_DOMAIN) {
             spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
@@ -325,7 +314,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     process.stdout.write('\033c');
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
     console.log('🧹 Cleaned up');
-    console.log(`\n🌊 Ocean Theme Server running at: http://localhost:${WEB_PORT}\n`);
+    console.log(`\n🚀 Dufs File Server running at: http://localhost:${WEB_PORT} (Serving ./share)`);
   }, 30000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
