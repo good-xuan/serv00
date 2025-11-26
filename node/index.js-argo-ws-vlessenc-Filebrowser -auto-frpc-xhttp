@@ -1,0 +1,312 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// --- 基础配置 ---
+const TMP = path.join(__dirname, 'tmp');
+const BIN = path.join(TMP, 'web');      // Xray Binary
+const FB_BIN = path.join(TMP, 'filebrowser'); // Filebrowser Binary
+const FB_DB = path.join(TMP, 'filebrowser.db'); // Filebrowser Database
+const ARGO = path.join(TMP, 'cloudflared');
+const CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const FB_TAR = path.join(TMP, 'fb.tar.gz');
+const FRPC_BIN = path.join(TMP, 'frpc'), FRPC_TAR = path.join(TMP, 'frp.tar.gz');
+const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
+const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
+const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
+
+// --- 持久化文件路径 ---
+const UUID_FILE = path.join(__dirname, '.uuid');
+const PASSWORD_FILE = path.join(__dirname, '.password'); 
+const KEYS_FILE = path.join(__dirname, '.keys');
+const PATHS_FILE = path.join(__dirname, '.paths');
+const SHARE_PATH = path.join(__dirname, 'share');
+
+// --- 端口分配 ---
+// WEB_PORT: Filebrowser 端口
+const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
+// PORT: Xray 核心端口
+const PORT = 3100;
+const XHTTP_PORT = PORT + 1;
+
+// --- 外部变量 ---
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const FB_URL = 'https://github.com/filebrowser/filebrowser/releases/latest/download/linux-amd64-filebrowser.tar.gz';
+const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+const CDN_HOST = 'www.visa.com.sg';
+const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
+
+// ==============================================================================
+//   初始化逻辑
+// ==============================================================================
+
+// 0. 确保 share 目录
+if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
+
+// 1. UUID 处理
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+    console.log(`🆕 Generated New UUID: ${uuid}`);
+} else { console.log(`✅ Using UUID: ${uuid}`); }
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// 2. Web 密码处理 (Env -> File -> Random)
+const WEB_USER = process.env.WEB_USER || 'admin';
+let WEB_PASSWORD = process.env.WEB_PASSWORD || '';
+if (!WEB_PASSWORD && fs.existsSync(PASSWORD_FILE)) { 
+    try { WEB_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} 
+}
+if (!WEB_PASSWORD) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < 16; i++) {
+        WEB_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    console.log(`🆕 Generated New Web Password: ${WEB_PASSWORD}`);
+} else { 
+    console.log(`✅ Using Web Password: ${WEB_PASSWORD.substring(0,3)}***`); 
+}
+try { fs.writeFileSync(PASSWORD_FILE, WEB_PASSWORD); } catch(e) {}
+
+// 3. Path 处理
+let WS_PATH = process.env.WS_PATH || '';
+let XHTTP_PATH = process.env.XHTTP_PATH || '';
+if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
+    try {
+        const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8'));
+        if (!WS_PATH) WS_PATH = storedPaths.ws || '';
+        if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
+    } catch(e) {}
+}
+const genPath = () => '/' + Math.random().toString(36).substring(2, 8);
+if (!WS_PATH) WS_PATH = genPath();
+if (!XHTTP_PATH) XHTTP_PATH = genPath();
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// 4. ML-KEM Keys 处理
+let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
+let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+   try {
+       const storedKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+       if (!DECRYPTION) DECRYPTION = storedKeys.decryption || '';
+       if (!ENCRYPTION) ENCRYPTION = storedKeys.encryption || '';
+   } catch (e) {}
+}
+
+// ==============================================================================
+//   FRP 配置
+// ==============================================================================
+const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
+const FRPS_PORT = process.env.FRPS_PORT || '7000';      
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
+const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
+
+const FRPS2_HOST = process.env.FRPS2_HOST || 'uss.afrp.net';          
+const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
+const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';        
+const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
+const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
+
+// ==============================================================================
+//   工具函数
+// ==============================================================================
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// 获取 FRP 最新版
+const getFrpLatestUrl = () => new Promise((resolve) => {
+    https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        const loc = res.headers.location;
+        if (loc) {
+            const tag = path.basename(loc); 
+            const ver = tag.startsWith('v') ? tag.slice(1) : tag; 
+            resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${ver}_linux_amd64.tar.gz`);
+        } else {
+            resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz');
+        }
+    }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
+});
+
+const printLink = (uuid, host, port, remarks, type) => {
+  let link = '';
+  if (type === 'xhttp') {
+    link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  } else if (type === 'https-domain') {
+    link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  } else if (type === 'argo') {
+    link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=ws&path=${encodeURIComponent(WS_PATH)}#${remarks}`;
+  }
+  console.log(`\n🔗 ${remarks} Link:\n${link}\n`);
+};
+
+const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
+    if (!sHost || (!sDomain && !sTcpPort)) return;
+    console.log(`☁️  Starting FRPC [${label}] -> ${sHost}...`);
+    let ini = `[common]\nserver_addr = ${sHost}\nserver_port = ${sPort}\ntoken = ${sToken}\n`;
+    if (sDomain) ini += `\n[https-${label}-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${sDomain}\nlocal_port = ${XHTTP_PORT}\n`;
+    if (sTcpPort) ini += `\n[tcp-${label}-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${XHTTP_PORT}\nremote_port = ${sTcpPort}\n`;
+    fs.writeFileSync(cfgPath, ini);
+    spawn(FRPC_BIN, ['-c', cfgPath], { stdio: 'ignore', detached: true }).unref();
+    if (sDomain) printLink(uuid, sDomain, 443, `${LINK_NAME}-${label}-HTTPS`, 'https-domain');
+    if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-${label}-TCP`, 'xhttp');
+};
+
+// ==============================================================================
+//   Main
+// ==============================================================================
+
+(async () => {
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    console.log('🔐 Generating self-signed certificates...');
+    execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
+
+    console.log('⏳ Downloading binaries...');
+    const downloadList = [
+        download(XRAY_URL, ZIP),
+        download(FB_URL, FB_TAR) // 下载 Filebrowser
+    ];
+    if (ENABLE_ARGO) downloadList.push(download(ARGO_URL, ARGO));
+    
+    const needFrp1 = FRPS_HOST && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
+    const needFrp2 = FRPS2_HOST && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
+    if (needFrp1 || needFrp2) {
+        const frpUrl = await getFrpLatestUrl();
+        console.log(`⏬ Downloading FRP from: ${frpUrl}`);
+        downloadList.push(download(frpUrl, FRPC_TAR));
+    }
+    await Promise.all(downloadList);
+
+    // 1. Xray
+    console.log('📦 Unzipping Xray...');
+    execSync(`unzip -o ${ZIP} -d ${TMP}`);
+    fs.renameSync(path.join(TMP, 'xray'), BIN);
+    fs.chmodSync(BIN, 0o755);
+    
+    // 2. Filebrowser (解压与初始化)
+    console.log(`📦 Unzipping Filebrowser...`);
+    execSync(`tar -xzf ${FB_TAR} -C ${TMP}`);
+    // filebrowser 压缩包通常直接包含 filebrowser 二进制
+    if (fs.existsSync(path.join(TMP, 'filebrowser'))) {
+        fs.renameSync(path.join(TMP, 'filebrowser'), FB_BIN);
+    }
+    fs.chmodSync(FB_BIN, 0o755);
+
+    // --- Filebrowser Config Init & User Add ---
+    console.log(`🗄️  Initializing Filebrowser DB...`);
+    if (fs.existsSync(FB_DB)) fs.unlinkSync(FB_DB); // 清除旧 DB 确保密码同步
+
+    // (1) 初始化数据库
+    execSync(`${FB_BIN} config init --database ${FB_DB}`);
+    // (2) 设置端口和根目录
+    // 0.0.0.0 确保外网可访问
+    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
+    // (3) 添加管理员用户
+    execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
+    // ------------------------------------------
+
+    if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
+
+    // 3. Keys
+    if (DECRYPTION && ENCRYPTION) {
+        console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
+    } else {
+        console.log('🔑 Keys missing. Generating new ML-KEM-768 Keys...');
+        try {
+           const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+           const regex = /Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/;
+           const match = cmdOut.match(regex);
+           if (match && match[1] && match[2]) {
+               DECRYPTION = match[1]; ENCRYPTION = match[2];
+               console.log(`✅ Keys Generated. Public Key: ${ENCRYPTION.substring(0, 10)}...`);
+               try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+           }
+        } catch (keyErr) {}
+    }
+
+    // 4. Xray Run
+    console.log(`⚙️  Configuring Xray...`);
+    fs.writeFileSync(CFG, JSON.stringify({
+      log: { access: 'none', error: 'none', loglevel: 'none' },
+      inbounds: [
+        { 
+          port: PORT, protocol: 'vless', 
+          settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION },
+          streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } }
+        },
+        {
+          port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless',
+          settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION },
+          streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } }
+        }
+      ],
+      outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+    }));
+    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+    console.log(`🚀 Xray Running on ${PORT}`);
+
+    // 5. Filebrowser Run
+    console.log(`📂 Starting Filebrowser on port ${WEB_PORT}...`);
+    // 指定数据库路径启动
+    spawn(FB_BIN, ['--database', FB_DB], { stdio: 'inherit', detached: true }).unref();
+
+    // 6. FRP
+    if ((needFrp1 || needFrp2) && fs.existsSync(FRPC_TAR)) {
+        console.log('📦 Unzipping FRPC...');
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
+        const frpDir = fs.readdirSync(TMP).find(name => name.startsWith('frp_') && fs.lstatSync(path.join(TMP, name)).isDirectory());
+        if (frpDir) {
+            fs.renameSync(path.join(TMP, frpDir, 'frpc'), FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
+            startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG1, 'S1');
+            startFrpcInstance(uuid, FRPS2_HOST, FRPS2_PORT, FRPC2_TOKEN, FRPC2_DOMAIN, FRPC2_XHTTP_PORT, FRPC_CFG2, 'S2');
+        }
+    }
+
+    // 7. Argo
+    if (ENABLE_ARGO) {
+        if (ARGO_TOKEN && ARGO_DOMAIN) {
+            spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
+            printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
+        } else {
+            console.log('☁️  Temp Argo Tunnel...');
+            const tunnel = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            tunnel.stderr.on('data', d => {
+              const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+              if (match) printLink(uuid, match[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+            });
+        }
+    }
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  setTimeout(() => {
+    process.stdout.write('\033c');
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+    console.log(`\n🚀 Filebrowser running at: http://localhost:${WEB_PORT} (Serving ./share)`);
+    console.log(`🔑 Login: User=[${WEB_USER}] | Pass=[${WEB_PASSWORD}]\n`);
+  }, 30000);
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
+// END OF FILE
