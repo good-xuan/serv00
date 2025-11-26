@@ -4,7 +4,8 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 const TMP = path.join(__dirname, 'tmp');
 const BIN = path.join(TMP, 'web');      // Xray Binary
 const FB_BIN = path.join(TMP, 'filebrowser'); // Filebrowser Binary
-const FB_DB = path.join(TMP, 'filebrowser.db'); // Filebrowser Database
+// 修改：数据库存放在当前目录（持久化），而不是临时目录
+const FB_DB = path.join(__dirname, 'filebrowser.db'); 
 const ARGO = path.join(TMP, 'cloudflared');
 const CFG = path.join(TMP, 'config.json');
 const ZIP = path.join(TMP, 'xray.zip');
@@ -65,9 +66,7 @@ if (!WEB_PASSWORD) {
     for (let i = 0; i < 16; i++) {
         WEB_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    console.log(`🆕 Generated New Web Password: ${WEB_PASSWORD}`);
-} else { 
-    console.log(`✅ Using Web Password: ${WEB_PASSWORD.substring(0,3)}***`); 
+    console.log(`🆕 Generated New Web Password`);
 }
 try { fs.writeFileSync(PASSWORD_FILE, WEB_PASSWORD); } catch(e) {}
 
@@ -182,7 +181,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     console.log('⏳ Downloading binaries...');
     const downloadList = [
         download(XRAY_URL, ZIP),
-        download(FB_URL, FB_TAR) // 下载 Filebrowser
+        download(FB_URL, FB_TAR)
     ];
     if (ENABLE_ARGO) downloadList.push(download(ARGO_URL, ARGO));
     
@@ -201,27 +200,35 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     fs.renameSync(path.join(TMP, 'xray'), BIN);
     fs.chmodSync(BIN, 0o755);
     
-    // 2. Filebrowser (解压与初始化)
+    // 2. Filebrowser
     console.log(`📦 Unzipping Filebrowser...`);
     execSync(`tar -xzf ${FB_TAR} -C ${TMP}`);
-    // filebrowser 压缩包通常直接包含 filebrowser 二进制
     if (fs.existsSync(path.join(TMP, 'filebrowser'))) {
         fs.renameSync(path.join(TMP, 'filebrowser'), FB_BIN);
     }
     fs.chmodSync(FB_BIN, 0o755);
 
-    // --- Filebrowser Config Init & User Add ---
-    console.log(`🗄️  Initializing Filebrowser DB...`);
-    if (fs.existsSync(FB_DB)) fs.unlinkSync(FB_DB); // 清除旧 DB 确保密码同步
+    // --- Filebrowser Config (Persistent) ---
+    console.log(`🗄️  Configuring Filebrowser...`);
+    
+    if (!fs.existsSync(FB_DB)) {
+        // [首次运行] 初始化 DB 并添加管理员
+        console.log(`🆕 Initializing new Filebrowser DB...`);
+        execSync(`${FB_BIN} config init --database ${FB_DB}`);
+        execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
+    } else {
+        // [重启] 数据库已存在
+        console.log(`✅ Loaded existing Filebrowser DB.`);
+        // 尝试更新管理员密码，以确保它与 .password 文件同步 (防止忘记密码)
+        try { 
+            execSync(`${FB_BIN} users update ${WEB_USER} --password ${WEB_PASSWORD} --database ${FB_DB}`, { stdio: 'ignore' });
+            console.log(`🔄 Syncing admin password...`);
+        } catch(e) {}
+    }
 
-    // (1) 初始化数据库
-    execSync(`${FB_BIN} config init --database ${FB_DB}`);
-    // (2) 设置端口和根目录
-    // 0.0.0.0 确保外网可访问
-    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --locale zh-CN --database ${FB_DB}`);
-    // (3) 添加管理员用户
-    execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
-    // ------------------------------------------
+    // [始终执行] 更新配置：确保端口和根目录与当前环境一致
+    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
+    // ---------------------------------------
 
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
@@ -265,7 +272,6 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
     // 5. Filebrowser Run
     console.log(`📂 Starting Filebrowser on port ${WEB_PORT}...`);
-    // 指定数据库路径启动
     spawn(FB_BIN, ['--database', FB_DB], { stdio: 'inherit', detached: true }).unref();
 
     // 6. FRP
