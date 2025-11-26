@@ -305,7 +305,6 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
     console.log('🧹 Cleaned up');
     console.log(`\n🚀 Filebrowser running at: http://localhost:${WEB_PORT} (Serving ./share)`);
-    console.log(`🔑 Login: User=[${WEB_USER}] | Pass=[${WEB_PASSWORD}]\n`);
   }, 30000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
