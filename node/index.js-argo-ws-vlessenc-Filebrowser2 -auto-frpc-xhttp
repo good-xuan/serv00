@@ -20,6 +20,7 @@ const UUID_FILE = path.join(__dirname, '.uuid');
 const PASSWORD_FILE = path.join(__dirname, '.password'); 
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
+const ARGO2_FILE = path.join(__dirname, '.argo2'); // Argo2 域名保存文件
 const SHARE_PATH = path.join(__dirname, 'share');
 
 // --- 端口分配 ---
@@ -181,6 +182,9 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 // ==============================================================================
 
 (async () => {
+  // 定义 Argo2 域名变量，用于后续显示
+  let argo2Url = '';
+
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
 
@@ -232,6 +236,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
             console.log(`🔄 Syncing admin password...`);
         } catch(e) {}
     }
+    // 始终更新配置以绑定正确端口和目录
     execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
 
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
@@ -312,13 +317,22 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (ENABLE_ARGO2) {
             console.log('☁️  Starting Argo 2 (Filebrowser)...');
             if (ARGO2_TOKEN && ARGO2_DOMAIN) {
+                argo2Url = `https://${ARGO2_DOMAIN}`;
+                // 持久化: 只写入文件，不读取
+                try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {}
+
                 spawn(ARGO, ['tunnel', 'run', '--token', ARGO2_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
-                console.log(`\n🔗 Filebrowser Argo Fixed Link: https://${ARGO2_DOMAIN}\n`);
+                console.log(`\n🔗 Filebrowser Argo Fixed Link: ${argo2Url}\n`);
             } else {
                 const tunnel2 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${WEB_PORT}`, '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
                 tunnel2.stderr.on('data', d => {
                   const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                  if (match) console.log(`\n🔗 Filebrowser Argo Temp Link: ${match[1]}\n`);
+                  if (match) {
+                      argo2Url = match[1];
+                      // 持久化: 只写入文件，不读取
+                      try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {}
+                      console.log(`\n🔗 Filebrowser Argo Temp Link: ${argo2Url}\n`);
+                  }
                 });
             }
         }
@@ -333,6 +347,9 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
     console.log('🧹 Cleaned up');
     console.log(`\n🚀 Filebrowser running at: http://localhost:${WEB_PORT} (Serving ./share)`);
+    if (ENABLE_ARGO2 && argo2Url) {
+        console.log(`🔗 Filebrowser Public URL: ${argo2Url}`);
+    }
   }, 30000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
