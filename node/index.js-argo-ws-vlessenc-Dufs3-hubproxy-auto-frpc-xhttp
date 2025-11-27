@@ -2,8 +2,8 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
 // --- 基础配置 ---
 const TMP = path.join(__dirname, 'tmp');
-const BIN = path.join(TMP, 'web');       // Xray Binary
-const DUFS_BIN = path.join(TMP, 'dufs'); // Dufs Binary (Replaces FB)
+const BIN = path.join(TMP, 'web');        // Xray Binary
+const DUFS_BIN = path.join(TMP, 'dufs');  // Dufs Binary (Replaces FB)
 const HUB_BIN = path.join(TMP, 'hubproxy'); // HubProxy Binary
 const ARGO = path.join(TMP, 'cloudflared');
 const CFG = path.join(TMP, 'config.json');
@@ -24,17 +24,15 @@ const ARGO2_FILE = path.join(__dirname, '.argo2'); // Dufs Domain
 const ARGO3_FILE = path.join(__dirname, '.argo3'); // HubProxy Domain
 const SHARE_PATH = path.join(__dirname, 'share');
 
-// --- 端口分配 (HubProxy 接管主端口) ---
-// WEB_PORT: 主入口端口 (环境变量)
+// --- 端口分配 ---
+// WEB_PORT: 主入口端口 (由平台环境变量决定, 默认 3000)
+// 分配给: Dufs
 const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
 
-// 1. HubProxy 使用主端口
-const HUB_PORT = WEB_PORT;
+// HUB_PORT: HubProxy 端口 (偏移 2 位, 避免冲突)
+const HUB_PORT = WEB_PORT + 2;
 
-// 2. Dufs 使用主端口 + 2 (避免冲突)
-const DUFS_PORT = WEB_PORT + 2; 
-
-// 3. Xray 固定端口
+// Xray 端口
 const PORT = 3100;      
 const XHTTP_PORT = 3101;
 
@@ -146,7 +144,6 @@ const download = (url, dest) => new Promise((resolve, reject) => {
   }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
-// 安全获取 FRP 链接
 const getFrpLatestUrl = () => new Promise((resolve) => {
     https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
         try {
@@ -158,36 +155,22 @@ const getFrpLatestUrl = () => new Promise((resolve) => {
     }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
 });
 
-// 获取 Dufs 最新版
+// Dufs Latest
 const getDufsLatestUrl = () => new Promise((resolve) => {
-    console.log('🔍 Checking latest Dufs version...');
     https.get('https://github.com/sigoden/dufs/releases/latest', (res) => {
         try {
             const loc = res.headers.location;
             const tag = loc ? path.basename(loc) : 'v0.43.0';
             const ver = tag.replace('v', '');
             resolve(`https://github.com/sigoden/dufs/releases/download/${tag}/dufs-v${ver}-x86_64-unknown-linux-musl.tar.gz`);
-        } catch (e) { resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'); }
+        } catch(e) { resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'); }
     }).on('error', () => resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'));
 });
 
-// 安全获取 HubProxy 链接
+// HubProxy v1.1.9
 const getHubProxyUrl = () => new Promise((resolve) => {
-    console.log('🔍 Checking latest HubProxy version...');
-    const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
-    const req = https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
-        try {
-            if (res.statusCode === 200 || res.statusCode === 302) {
-                 const loc = res.headers.location;
-                 if (loc) {
-                     const tag = path.basename(loc);
-                     resolve(`https://github.com/sky22333/hubproxy/releases/download/${tag}/hubproxy-${tag}-linux-amd64.tar.gz`);
-                 } else { resolve(fallback); }
-            } else { resolve(fallback); }
-        } catch(e) { resolve(fallback); }
-    });
-    req.on('error', () => resolve(fallback));
-    req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
+    console.log('🔍 Checking HubProxy v1.1.9...');
+    resolve('https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz');
 });
 
 // 递归查找二进制文件
@@ -246,8 +229,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
     console.log('⏳ Downloading binaries...');
     const dufsUrl = await getDufsLatestUrl();
-    let hubUrl;
-    try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
+    const hubUrl = await getHubProxyUrl();
 
     const downloadList = [
         download(XRAY_URL, ZIP),
@@ -269,17 +251,13 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     execSync(`unzip -o ${ZIP} -d ${TMP}`);
     fs.renameSync(path.join(TMP, 'xray'), BIN); fs.chmodSync(BIN, 0o755);
 
-    // 2. Dufs (Replaces FB)
+    // 2. Dufs
     console.log(`📦 Unzipping Dufs...`);
     execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`);
-    // Handle Dufs binary finding
-    const dufsFile = findBin(TMP, 'dufs');
-    if (dufsFile) {
-        if (dufsFile !== DUFS_BIN) {
-            // Safety move
-            if (fs.existsSync(DUFS_BIN)) fs.rmSync(DUFS_BIN, { recursive: true, force: true });
-            fs.renameSync(dufsFile, DUFS_BIN);
-        }
+    // Find dufs binary
+    const dufsFound = findBin(TMP, 'dufs');
+    if (dufsFound) {
+        if (dufsFound !== DUFS_BIN) fs.renameSync(dufsFound, DUFS_BIN);
         fs.chmodSync(DUFS_BIN, 0o755);
     }
 
@@ -300,12 +278,12 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         }
         fs.chmodSync(HUB_BIN, 0o755);
     } else {
-        console.warn('⚠️ HubProxy binary not found, skipping...');
+        console.warn('⚠️ HubProxy binary not found!');
     }
 
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
-    // 4. ML-KEM Keys
+    // 4. Generate Keys
     if (DECRYPTION && ENCRYPTION) {
         console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
     } else {
@@ -333,22 +311,25 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Xray Running on ${PORT}`);
 
-    // 6. Start Dufs (Using DUFS_PORT = WEB_PORT + 2)
-    console.log(`📂 Starting Dufs on port ${DUFS_PORT}...`);
-    const dufsArgs = [SHARE_PATH, '-p', String(DUFS_PORT), '-A', '--bind', '0.0.0.0'];
-    if (WEB_USER && WEB_PASSWORD) {
-        // Dufs Auth: user:pass@/:rw
-        dufsArgs.push('-a', `${WEB_USER}:${WEB_PASSWORD}@/:rw`);
-    }
+    // 6. Start Dufs (On WEB_PORT)
+    console.log(`📂 Starting Dufs on port ${WEB_PORT}...`);
+    const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '-A', '--bind', '0.0.0.0'];
+    if (WEB_USER && WEB_PASSWORD) dufsArgs.push('-a', `${WEB_USER}:${WEB_PASSWORD}@/:rw`);
     spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
 
-    // 7. Start HubProxy (Using HUB_PORT = WEB_PORT)
+    // 7. Start HubProxy (On HUB_PORT, overriding ENV)
+    // HubProxy reads SERVER_PORT/PORT by default. We MUST override it.
     if (fs.existsSync(HUB_BIN)) {
-        console.log(`🐳 HubProxy Running on ${HUB_PORT} (Main Entry)`);
+        console.log(`🐳 HubProxy Running on ${HUB_PORT} (Avoiding Conflict)`);
+        // Force env variables so HubProxy doesn't pick up the main WEB_PORT
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore',
             detached: true,
-            env: { ...process.env, PORT: String(HUB_PORT) }
+            env: { 
+                ...process.env, 
+                PORT: String(HUB_PORT),
+                SERVER_PORT: String(HUB_PORT) 
+            }
         }).unref();
     }
 
@@ -381,7 +362,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
             }
         }
 
-        // [Argo 2] Dufs (Target DUFS_PORT)
+        // [Argo 2] Dufs (Target WEB_PORT)
         if (ENABLE_ARGO2) {
             console.log('☁️  Starting Argo 2 (Dufs)...');
             if (ARGO2_TOKEN && ARGO2_DOMAIN) {
@@ -390,7 +371,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 spawn(ARGO, ['tunnel', 'run', '--token', ARGO2_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
                 console.log(`🔗 Dufs Fixed: ${argo2Url}`);
             } else {
-                const tunnel2 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${DUFS_PORT}`, '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                const tunnel2 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${WEB_PORT}`, '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
                 tunnel2.stderr.on('data', d => {
                   const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
                   if (match) { argo2Url = match[1]; try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {} console.log(`🔗 Dufs Temp: ${argo2Url}`); }
@@ -424,10 +405,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     process.stdout.write('\033c');
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
     console.log('🧹 Cleaned up');
-    console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT} (Main)`);
-    if (ENABLE_ARGO3 && argo3Url) console.log(`🔗 Hub Public: ${argo3Url}`);
-    console.log(`\n📂 Dufs: http://localhost:${DUFS_PORT}`);
+    console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (Main)`);
     if (ENABLE_ARGO2 && argo2Url) console.log(`🔗 Dufs Public: ${argo2Url}`);
+    console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
+    if (ENABLE_ARGO3 && argo3Url) console.log(`🔗 Hub Public: ${argo3Url}`);
   }, 30000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
