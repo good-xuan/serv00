@@ -20,10 +20,6 @@ const CLOUDFLARED_EXEC = path.join(TEMP_DIR, 'cloudflared');
 const DUFS_ARCHIVE = path.join(TEMP_DIR, 'dufs.tar.gz');
 const HUBPROXY_ARCHIVE = path.join(TEMP_DIR, 'hub.tar.gz');
 
-// 状态持久化文件 (State Persistence)
-const DUFS_DOMAIN_FILE = path.join(ROOT_DIR, '.argo2');     // 保存 Dufs 域名
-const HUBPROXY_DOMAIN_FILE = path.join(ROOT_DIR, '.argo3'); // 保存 HubProxy 域名
-
 // ==============================================================================
 //   2. 服务端口配置 (Port Configuration)
 // ==============================================================================
@@ -160,7 +156,7 @@ const findExecutable = (dir, filename) => {
 // ==============================================================================
 
 (async () => {
-    // 用于存储生成的公网地址
+    // 用于存储生成的公网地址 (内存存储，不持久化)
     let dufsPublicUrl = '';
     let hubProxyPublicUrl = '';
 
@@ -207,7 +203,6 @@ const findExecutable = (dir, filename) => {
         execSync(`tar -xzf ${HUBPROXY_ARCHIVE} -C ${TEMP_DIR}`);
         const hubFoundPath = findExecutable(TEMP_DIR, 'hubproxy');
         if (hubFoundPath) {
-            // 如果找到的文件名不是目标文件名，移动并改名
             if (hubFoundPath !== HUBPROXY_EXEC) {
                 fs.renameSync(hubFoundPath, HUBPROXY_EXEC);
             }
@@ -224,9 +219,6 @@ const findExecutable = (dir, filename) => {
         // --- 3. 启动服务阶段 (Starting Services) ---
 
         // 启动 Dufs (主服务)
-        // -A: 允许所有操作 (上传/删除/搜索/压缩)
-        // --bind 0.0.0.0: 允许外网访问
-        // 无需认证 (-a)
         console.log(`📂 Starting Dufs on port ${DUFS_PORT}...`);
         spawn(DUFS_EXEC, [SHARE_DIR, '-p', String(DUFS_PORT), '-A', '--bind', '0.0.0.0'], {
             stdio: 'inherit',
@@ -256,7 +248,6 @@ const findExecutable = (dir, filename) => {
                 if (DUFS_TUNNEL_TOKEN && DUFS_TUNNEL_DOMAIN) {
                     // 固定隧道
                     dufsPublicUrl = `https://${DUFS_TUNNEL_DOMAIN}`;
-                    try { fs.writeFileSync(DUFS_DOMAIN_FILE, dufsPublicUrl); } catch (e) {}
                     
                     spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', DUFS_TUNNEL_TOKEN], { 
                         stdio: 'ignore', detached: true 
@@ -274,7 +265,6 @@ const findExecutable = (dir, filename) => {
                         const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
                         if (match) {
                             dufsPublicUrl = match[1];
-                            try { fs.writeFileSync(DUFS_DOMAIN_FILE, dufsPublicUrl); } catch (e) {}
                             console.log(`🔗 Dufs Tunnel (Temp): ${dufsPublicUrl}`);
                         }
                     });
@@ -286,7 +276,6 @@ const findExecutable = (dir, filename) => {
                 if (HUBPROXY_TUNNEL_TOKEN && HUBPROXY_TUNNEL_DOMAIN) {
                     // 固定隧道
                     hubProxyPublicUrl = `https://${HUBPROXY_TUNNEL_DOMAIN}`;
-                    try { fs.writeFileSync(HUBPROXY_DOMAIN_FILE, hubProxyPublicUrl); } catch (e) {}
 
                     spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', HUBPROXY_TUNNEL_TOKEN], { 
                         stdio: 'ignore', detached: true 
@@ -304,7 +293,6 @@ const findExecutable = (dir, filename) => {
                         const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
                         if (match) {
                             hubProxyPublicUrl = match[1];
-                            try { fs.writeFileSync(HUBPROXY_DOMAIN_FILE, hubProxyPublicUrl); } catch (e) {}
                             console.log(`🔗 HubProxy Tunnel (Temp): ${hubProxyPublicUrl}`);
                         }
                     });
@@ -317,35 +305,48 @@ const findExecutable = (dir, filename) => {
         process.exit(1);
     }
 
-    // --- 5. 最终汇总 (Final Summary) ---
-    setTimeout(() => {
-        // 清屏 (ANSI Reset)
+    // --- 状态打印函数 ---
+    const printServiceStatus = () => {
+        // 物理清屏
         process.stdout.write('\033c');
         
-        // 清理临时文件
-        if (fs.existsSync(TEMP_DIR)) fs.rmSync(TEMP_DIR, { recursive: true, force: true });
-        console.log('🧹 System cleaned up.');
-
         console.log(`\n========================================`);
         console.log(`   🚀 SERVICE RUNNING STATUS`);
+        console.log(`   ⏰ Time: ${new Date().toLocaleString()}`);
         console.log(`========================================`);
         
         console.log(`\n📂 [Dufs File Manager]`);
         console.log(`   ► Local: http://localhost:${DUFS_PORT}`);
         if (IS_DUFS_TUNNEL_ENABLED && dufsPublicUrl) {
             console.log(`   ► Public: ${dufsPublicUrl}`);
+        } else if (IS_DUFS_TUNNEL_ENABLED) {
+            console.log(`   ► Public: (Initializing...)`);
         }
 
         console.log(`\n🐳 [HubProxy Docker Mirror]`);
         console.log(`   ► Local: http://localhost:${HUBPROXY_PORT}`);
         if (IS_HUBPROXY_TUNNEL_ENABLED && hubProxyPublicUrl) {
             console.log(`   ► Public: ${hubProxyPublicUrl}`);
+        } else if (IS_HUBPROXY_TUNNEL_ENABLED) {
+            console.log(`   ► Public: (Initializing...)`);
         }
         console.log(`\n========================================\n`);
+    };
 
+    // --- 5. 启动后初次汇总 ---
+    setTimeout(() => {
+        // 清理临时文件
+        if (fs.existsSync(TEMP_DIR)) fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+        printServiceStatus();
     }, 30000);
 
-    // 保持进程活跃
-    setInterval(() => console.log('💗 Heartbeat', new Date().toISOString()), 300000);
+    // --- 6. 定时任务 ---
+    
+    // 每 1 小时清屏并显示状态 (3600000 ms)
+    setInterval(printServiceStatus, 3600000);
+
+    // 每 5 分钟简单心跳 (不替代状态板，只是为了保活日志)
+    setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+
 })();
 // END OF FILE
