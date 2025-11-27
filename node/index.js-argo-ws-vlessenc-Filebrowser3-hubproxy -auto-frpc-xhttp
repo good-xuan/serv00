@@ -1,13 +1,17 @@
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
 
-// --- 基础配置 ---
+// ==============================================================================
+//   1. 基础配置
+// ==============================================================================
 const TMP = path.join(__dirname, 'tmp');
-const BIN = path.join(TMP, 'web');       // Xray Binary
-const FB_BIN = path.join(TMP, 'filebrowser'); // Filebrowser Binary
-const HUB_BIN = path.join(TMP, 'hubproxy');   // HubProxy Binary
-const FB_DB = path.join(__dirname, 'filebrowser.db'); // DB Persist
+const BIN = path.join(TMP, 'web');            // Xray
+const FB_BIN = path.join(TMP, 'filebrowser'); // Filebrowser
+const HUB_BIN = path.join(TMP, 'hub_app');    // HubProxy (改名避开文件夹冲突)
 const ARGO = path.join(TMP, 'cloudflared');
+
+// 配置文件
 const CFG = path.join(TMP, 'config.json');
+const FB_DB = path.join(__dirname, 'filebrowser.db'); // FB 数据库持久化
 const ZIP = path.join(TMP, 'xray.zip');
 const FB_TAR = path.join(TMP, 'fb.tar.gz');
 const HUB_TAR = path.join(TMP, 'hub.tar.gz');
@@ -16,81 +20,88 @@ const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
 const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
 const CERT_FILE = path.join(TMP, 'cert.pem'), KEY_FILE = path.join(TMP, 'key.pem');
 
-// --- 持久化文件路径 ---
+// 持久化文件
 const UUID_FILE = path.join(__dirname, '.uuid');
 const PASSWORD_FILE = path.join(__dirname, '.password'); 
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
-const ARGO2_FILE = path.join(__dirname, '.argo2'); // Filebrowser Domain
-const ARGO3_FILE = path.join(__dirname, '.argo3'); // HubProxy Domain
+const ARGO2_FILE = path.join(__dirname, '.argo2');
+const ARGO3_FILE = path.join(__dirname, '.argo3');
 const SHARE_PATH = path.join(__dirname, 'share');
 
-// --- 端口分配 (调整：FB 占主端口) ---
-// WEB_PORT: 主入口端口 (环境变量)
+// ==============================================================================
+//   2. 端口分配
+// ==============================================================================
+// WEB_PORT: 主入口 (Filebrowser)
 const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
 
-// 1. Filebrowser 使用主端口
-const FB_PORT = WEB_PORT;
+// HUB_PORT: 副端口 (HubProxy)
+const HUB_PORT = WEB_PORT + 2;
 
-// 2. HubProxy 使用主端口 + 2 (避免冲突)
-const HUB_PORT = WEB_PORT + 2; 
-
-// 3. Xray 固定端口
+// Xray 端口
 const PORT = 3100;      
 const XHTTP_PORT = 3101;
 
-// --- 外部变量 ---
+// ==============================================================================
+//   3. 外部变量 & 开关
+// ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 const FB_URL = 'https://github.com/filebrowser/filebrowser/releases/latest/download/linux-amd64-filebrowser.tar.gz';
 const ARGO_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
 const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
-// --- Argo 开关控制 ---
-const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';   // 总开关
-const ENABLE_ARGO1 = process.env.ENABLE_ARGO1 !== 'false'; // Xray Tunnel
-const ENABLE_ARGO2 = process.env.ENABLE_ARGO2 !== 'false'; // Filebrowser Tunnel
-const ENABLE_ARGO3 = process.env.ENABLE_ARGO3 !== 'false'; // HubProxy Tunnel
+// Argo 开关
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';
+const ENABLE_ARGO1 = process.env.ENABLE_ARGO1 !== 'false'; // Xray
+const ENABLE_ARGO2 = process.env.ENABLE_ARGO2 !== 'false'; // Filebrowser
+const ENABLE_ARGO3 = process.env.ENABLE_ARGO3 !== 'false'; // HubProxy
 
-// [Argo 1] Xray
+// Argo Tokens
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-
-// [Argo 2] Filebrowser
 const ARGO2_TOKEN = process.env.ARGO2_TOKEN || '';
 const ARGO2_DOMAIN = process.env.ARGO2_DOMAIN || '';
-
-// [Argo 3] HubProxy
 const ARGO3_TOKEN = process.env.ARGO3_TOKEN || '';
 const ARGO3_DOMAIN = process.env.ARGO3_DOMAIN || '';
 
-// ==============================================================================
-//   初始化逻辑
-// ==============================================================================
+// FRP
+const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
+const FRPS_PORT = process.env.FRPS_PORT || '7000';      
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
+const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
 
+const FRPS2_HOST = process.env.FRPS2_HOST || 'uss.afrp.net';          
+const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
+const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';        
+const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
+const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
+
+// ==============================================================================
+//   4. 初始化 (UUID/Pass/Path)
+// ==============================================================================
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
-// 1. UUID
+// UUID
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!uuid) {
     uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
-    console.log(`🆕 Generated New UUID: ${uuid}`);
-} else { console.log(`✅ Using UUID: ${uuid}`); }
+}
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
-// 2. Web Password
+// Password
 const WEB_USER = process.env.WEB_USER || 'admin';
 let WEB_PASSWORD = process.env.WEB_PASSWORD || '';
 if (!WEB_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { WEB_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!WEB_PASSWORD) {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < 16; i++) WEB_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
-    console.log(`🆕 Generated New Web Password`);
 }
 try { fs.writeFileSync(PASSWORD_FILE, WEB_PASSWORD); } catch(e) {}
 
-// 3. Path
+// Path
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
 if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
@@ -105,7 +116,7 @@ if (!WS_PATH) WS_PATH = genPath();
 if (!XHTTP_PATH) XHTTP_PATH = genPath();
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
-// 4. ML-KEM Keys
+// Keys
 let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
 let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
 if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
@@ -117,22 +128,7 @@ if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
 }
 
 // ==============================================================================
-//   FRP Variables
-// ==============================================================================
-const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
-const FRPS_PORT = process.env.FRPS_PORT || '7000';      
-const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
-const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
-const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
-
-const FRPS2_HOST = process.env.FRPS2_HOST || 'uss.afrp.net';          
-const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
-const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';        
-const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
-const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
-
-// ==============================================================================
-//   Helpers
+//   5. 辅助函数
 // ==============================================================================
 
 const download = (url, dest) => new Promise((resolve, reject) => {
@@ -148,21 +144,18 @@ const download = (url, dest) => new Promise((resolve, reject) => {
   }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
-// 安全获取 FRP 链接
 const getFrpLatestUrl = () => new Promise((resolve) => {
     https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
         try {
             const loc = res.headers.location;
             const tag = loc ? path.basename(loc) : 'v0.58.1';
-            const ver = tag.startsWith('v') ? tag.slice(1) : tag; 
-            resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${ver}_linux_amd64.tar.gz`);
+            resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${tag.startsWith('v')?tag.slice(1):tag}_linux_amd64.tar.gz`);
         } catch(e) { resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'); }
     }).on('error', () => resolve('https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'));
 });
 
-// 安全获取 HubProxy 链接
 const getHubProxyUrl = () => new Promise((resolve) => {
-    console.log('🔍 Checking latest HubProxy version...');
+    console.log('🔍 Checking HubProxy...');
     const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
     const req = https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
         try {
@@ -179,9 +172,8 @@ const getHubProxyUrl = () => new Promise((resolve) => {
     req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
 });
 
-// 递归查找二进制文件
+// 递归查找二进制文件 (跳过压缩包)
 const findBin = (dir, name) => {
-    let results = [];
     try {
         const files = fs.readdirSync(dir, { withFileTypes: true });
         for (const f of files) {
@@ -190,8 +182,7 @@ const findBin = (dir, name) => {
                 const res = findBin(fullPath, name);
                 if (res) return res;
             } else {
-                // 查找名字包含 name 且不是压缩包的文件
-                if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.tar.gz') && !f.name.endsWith('.zip')) {
+                if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz') && !f.name.endsWith('.zip')) {
                     return fullPath;
                 }
             }
@@ -221,7 +212,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 };
 
 // ==============================================================================
-//   Main
+//   6. 主程序
 // ==============================================================================
 
 (async () => {
@@ -231,7 +222,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
   fs.mkdirSync(TMP, { recursive: true });
 
   try {
-    console.log('🔐 Generating self-signed certificates...');
+    console.log('🔐 Generating certs...');
     execSync(`openssl req -x509 -newkey rsa:2048 -nodes -sha256 -keyout ${KEY_FILE} -out ${CERT_FILE} -days 3650 -subj '/CN=localhost'`);
 
     console.log('⏳ Downloading binaries...');
@@ -248,7 +239,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if (FRPS_HOST || FRPS2_HOST) {
         let frpUrl;
         try { frpUrl = await getFrpLatestUrl(); } catch (e) { frpUrl = 'https://github.com/fatedier/frp/releases/download/v0.58.1/frp_0.58.1_linux_amd64.tar.gz'; }
-        console.log(`⏬ Downloading FRP from: ${frpUrl}`);
+        console.log(`⏬ Downloading FRP...`);
         downloadList.push(download(frpUrl, FRPC_TAR));
     }
     await Promise.all(downloadList);
@@ -264,41 +255,22 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if (fs.existsSync(path.join(TMP, 'filebrowser'))) fs.renameSync(path.join(TMP, 'filebrowser'), FB_BIN);
     fs.chmodSync(FB_BIN, 0o755);
 
-    // 3. HubProxy
+    // 3. HubProxy (查找并移动到 HUB_BIN 防止冲突)
     console.log(`📦 Unzipping HubProxy...`);
     execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
-    const hubFoundPath = findBin(TMP, 'hubproxy');
-    if (hubFoundPath) {
-        if (hubFoundPath !== HUB_BIN) {
-            if (fs.existsSync(HUB_BIN)) {
-                const tempBin = path.join(TMP, 'hubproxy_temp_bin');
-                fs.renameSync(hubFoundPath, tempBin);
-                fs.rmSync(HUB_BIN, { recursive: true, force: true });
-                fs.renameSync(tempBin, HUB_BIN);
-            } else {
-                fs.renameSync(hubFoundPath, HUB_BIN);
-            }
-        }
+    const hubFound = findBin(TMP, 'hubproxy');
+    if (hubFound) {
+        if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
         fs.chmodSync(HUB_BIN, 0o755);
     } else {
-        console.warn('⚠️ HubProxy binary not found, skipping...');
+        console.warn('⚠️ HubProxy binary not found!');
     }
 
     if (ENABLE_ARGO && fs.existsSync(ARGO)) fs.chmodSync(ARGO, 0o755);
 
-    // 4. Configure Filebrowser (Using FB_PORT)
-    console.log(`🗄️  Configuring Filebrowser...`);
-    if (!fs.existsSync(FB_DB)) {
-        execSync(`${FB_BIN} config init --database ${FB_DB}`);
-        execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
-    } else {
-        try { execSync(`${FB_BIN} users update ${WEB_USER} --password ${WEB_PASSWORD} --database ${FB_DB}`, { stdio: 'ignore' }); } catch(e) {}
-    }
-    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${FB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
-
-    // 5. Generate Keys
+    // 4. Keys
     if (DECRYPTION && ENCRYPTION) {
-        console.log('✅ Using Configured/Loaded ML-KEM-768 Keys.');
+        console.log('✅ Using ML-KEM Keys.');
     } else {
         console.log('🔑 Generating Keys...');
         try {
@@ -310,6 +282,17 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
            }
         } catch (keyErr) {}
     }
+
+    // 5. Configure Filebrowser
+    console.log(`🗄️  Configuring Filebrowser...`);
+    if (!fs.existsSync(FB_DB)) {
+        execSync(`${FB_BIN} config init --database ${FB_DB}`);
+        execSync(`${FB_BIN} users add ${WEB_USER} ${WEB_PASSWORD} --perm.admin --database ${FB_DB}`);
+    } else {
+        try { execSync(`${FB_BIN} users update ${WEB_USER} --password ${WEB_PASSWORD} --database ${FB_DB}`, { stdio: 'ignore' }); } catch(e) {}
+    }
+    // 绑定 WEB_PORT (主端口)
+    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} --database ${FB_DB}`);
 
     // 6. Start Xray
     console.log(`⚙️  Configuring Xray...`);
@@ -324,17 +307,17 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Xray Running on ${PORT}`);
 
-    // 7. Start Filebrowser (FB_PORT)
+    // 7. Start Filebrowser (主端口)
+    console.log(`📂 Starting Filebrowser on ${WEB_PORT}...`);
     spawn(FB_BIN, ['--database', FB_DB], { stdio: 'inherit', detached: true }).unref();
-    console.log(`📂 Filebrowser Running on ${FB_PORT}`);
 
-    // 8. Start HubProxy (HUB_PORT, env override)
+    // 8. Start HubProxy (副端口，环境变量防冲突)
     if (fs.existsSync(HUB_BIN)) {
         console.log(`🐳 HubProxy Running on ${HUB_PORT}`);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore',
             detached: true,
-            env: { ...process.env, PORT: String(HUB_PORT) }
+            env: { ...process.env, PORT: String(HUB_PORT), SERVER_PORT: String(HUB_PORT) }
         }).unref();
     }
 
@@ -342,61 +325,55 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     if ((FRPS_HOST || FRPS2_HOST) && fs.existsSync(FRPC_TAR)) {
         console.log('📦 Unzipping FRPC...');
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
-        const frpDir = fs.readdirSync(TMP).find(name => name.startsWith('frp_') && fs.lstatSync(path.join(TMP, name)).isDirectory());
-        if (frpDir) {
-            fs.renameSync(path.join(TMP, frpDir, 'frpc'), FRPC_BIN); fs.chmodSync(FRPC_BIN, 0o755);
+        const frpFound = findBin(TMP, 'frpc');
+        if (frpFound) {
+            fs.renameSync(frpFound, FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
             startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG1, 'S1');
             startFrpcInstance(uuid, FRPS2_HOST, FRPS2_PORT, FRPC2_TOKEN, FRPC2_DOMAIN, FRPC2_XHTTP_PORT, FRPC_CFG2, 'S2');
         }
     }
 
-    // 10. Start Argo Tunnels
+    // 10. Start Argo
     if (ENABLE_ARGO && fs.existsSync(ARGO)) {
-        // [Argo 1] Xray
+        // Argo 1 (Xray)
         if (ENABLE_ARGO1) {
-            console.log('☁️  Starting Argo 1 (Xray)...');
             if (ARGO_TOKEN && ARGO_DOMAIN) {
-                spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
+                spawn(ARGO, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
                 printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
             } else {
-                const tunnel1 = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
-                tunnel1.stderr.on('data', d => {
-                  const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                  if (match) printLink(uuid, match[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+                const t1 = spawn(ARGO, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t1.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) printLink(uuid, m[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
                 });
             }
         }
-
-        // [Argo 2] Filebrowser (Target FB_PORT)
+        // Argo 2 (Filebrowser)
         if (ENABLE_ARGO2) {
-            console.log('☁️  Starting Argo 2 (Filebrowser)...');
             if (ARGO2_TOKEN && ARGO2_DOMAIN) {
                 argo2Url = `https://${ARGO2_DOMAIN}`;
                 try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {}
-                spawn(ARGO, ['tunnel', 'run', '--token', ARGO2_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
-                console.log(`🔗 FB Fixed: ${argo2Url}`);
+                spawn(ARGO, ['tunnel', 'run', '--token', ARGO2_TOKEN], { stdio: 'ignore', detached: true }).unref();
             } else {
-                const tunnel2 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${FB_PORT}`, '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
-                tunnel2.stderr.on('data', d => {
-                  const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                  if (match) { argo2Url = match[1]; try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {} console.log(`🔗 FB Temp: ${argo2Url}`); }
+                const t2 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${WEB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t2.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) { argo2Url = m[1]; try { fs.writeFileSync(ARGO2_FILE, argo2Url); } catch(e) {} }
                 });
             }
         }
-
-        // [Argo 3] HubProxy (Target HUB_PORT)
+        // Argo 3 (HubProxy)
         if (ENABLE_ARGO3) {
-            console.log('☁️  Starting Argo 3 (HubProxy)...');
             if (ARGO3_TOKEN && ARGO3_DOMAIN) {
                 argo3Url = `https://${ARGO3_DOMAIN}`;
                 try { fs.writeFileSync(ARGO3_FILE, argo3Url); } catch(e) {}
-                spawn(ARGO, ['tunnel', 'run', '--token', ARGO3_TOKEN, '--protocol', 'http2'], { stdio: 'ignore', detached: true }).unref();
-                console.log(`🔗 Hub Fixed: ${argo3Url}`);
+                spawn(ARGO, ['tunnel', 'run', '--token', ARGO3_TOKEN], { stdio: 'ignore', detached: true }).unref();
             } else {
-                const tunnel3 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${HUB_PORT}`, '--no-autoupdate', '--protocol', 'http2'], { stdio: ['ignore', 'ignore', 'pipe'] });
-                tunnel3.stderr.on('data', d => {
-                  const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                  if (match) { argo3Url = match[1]; try { fs.writeFileSync(ARGO3_FILE, argo3Url); } catch(e) {} console.log(`🔗 Hub Temp: ${argo3Url}`); }
+                const t3 = spawn(ARGO, ['tunnel', '--url', `http://localhost:${HUB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t3.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) { argo3Url = m[1]; try { fs.writeFileSync(ARGO3_FILE, argo3Url); } catch(e) {} }
                 });
             }
         }
@@ -410,10 +387,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     process.stdout.write('\033c');
     if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
     console.log('🧹 Cleaned up');
-    console.log(`\n📂 Filebrowser: http://localhost:${FB_PORT} (Main)`);
-    if (ENABLE_ARGO2 && argo2Url) console.log(`🔗 FB Public: ${argo2Url}`);
+    console.log(`\n📂 Filebrowser: http://localhost:${WEB_PORT}`);
+    if (ENABLE_ARGO2 && argo2Url) console.log(`🔗 FB URL: ${argo2Url}`);
     console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
-    if (ENABLE_ARGO3 && argo3Url) console.log(`🔗 Hub Public: ${argo3Url}`);
+    if (ENABLE_ARGO3 && argo3Url) console.log(`🔗 Hub URL: ${argo3Url}`);
   }, 30000);
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
