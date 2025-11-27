@@ -2,8 +2,8 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
-const { URL } = require('url'); // 用于解析 Gotify URL
+const { spawn } = require('child_process');
+const { URL } = require('url');
 
 // ==============================================================================
 //   1. 目录与文件路径配置 (Paths & Files)
@@ -14,7 +14,7 @@ const SHARE_DIR = path.join(ROOT_DIR, 'share');
 
 // 可执行文件路径 (Executables)
 const DUFS_EXEC = path.join(TEMP_DIR, 'dufs');
-const HUBPROXY_EXEC = path.join(TEMP_DIR, 'hub_app'); // 改名以避免与解压目录冲突
+const HUBPROXY_EXEC = path.join(TEMP_DIR, 'hub_app');
 const CLOUDFLARED_EXEC = path.join(TEMP_DIR, 'cloudflared');
 
 // 压缩包路径 (Archives)
@@ -24,11 +24,10 @@ const HUBPROXY_ARCHIVE = path.join(TEMP_DIR, 'hub.tar.gz');
 // ==============================================================================
 //   2. 服务端口配置 (Port Configuration)
 // ==============================================================================
-// 主端口：分配给 Dufs (文件服务)
-const DUFS_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
-
-// 副端口：分配给 HubProxy (避免冲突，偏移 +2)
-const HUBPROXY_PORT = DUFS_PORT + 2;
+// Dufs 端口 (读取环境变量或默认 3000)
+const DUFS_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); 
+// HubProxy 端口 (Dufs 端口 + 2)
+const HUBPROXY_PORT = DUFS_PORT + 2; 
 
 // ==============================================================================
 //   3. 外部资源链接 (External URLs)
@@ -36,46 +35,41 @@ const HUBPROXY_PORT = DUFS_PORT + 2;
 const CLOUDFLARED_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
 
 // ==============================================================================
-//   4. 功能开关与隧道配置 (Toggles & Tunnel Config)
+//   4. 功能开关与隧道配置 (Hardcoded Toggles & Config)
 // ==============================================================================
-// 总开关 (⚠️ 硬编码为 true)
+// ⚠️ 所有功能开关硬编码为 true
 const IS_CLOUDFLARED_ENABLED = true;
-
-// Dufs 隧道配置 (对应原 Argo2) (⚠️ 硬编码为 true)
 const IS_DUFS_TUNNEL_ENABLED = true;
-const DUFS_TUNNEL_TOKEN = process.env.ARGO2_TOKEN || '';
-const DUFS_TUNNEL_DOMAIN = process.env.ARGO2_DOMAIN || '';
+const IS_HUBPROXY_TUNNEL_ENABLED = true;
+const IS_GOTIFY_ENABLED = true;
 
-// HubProxy 隧道配置 (对应原 Argo3) (⚠️ 硬编码为 true)
-const IS_HUBPROXY_TUNNEL_ENABLED = true; 
-const HUBPROXY_TUNNEL_TOKEN = process.env.ARGO3_TOKEN || '';
-const HUBPROXY_TUNNEL_DOMAIN = process.env.ARGO3_DOMAIN || '';
-
-// Gotify 推送配置 (⚠️ 硬编码为 true)
-const IS_GOTIFY_ENABLED = true; 
-const GOTIFY_URL = 'https://gotify.uptk.netlib.re/'; 
-const GOTIFY_TOKEN = 'AjYE_NvX42Q38Af';
-const GOTIFY_PRIORITY = parseInt(process.env.GOTIFY_PRIORITY || 5); // 默认优先级 5
+// 隧道和通知配置 (硬编码为空或占位符，只会启用临时 Argo 隧道)
+const DUFS_TUNNEL_TOKEN = '';
+const DUFS_TUNNEL_DOMAIN = '';
+const HUBPROXY_TUNNEL_TOKEN = '';
+const HUBPROXY_TUNNEL_DOMAIN = '';
+const GOTIFY_URL = 'https://gotify.uptk.netlib.re/'; // 请替换为你的 Gotify 地址
+const GOTIFY_TOKEN = 'An7sTEqqrRdXYwn'; // 请替换为你的 Gotify Token
+const GOTIFY_PRIORITY = 5;
 
 // ==============================================================================
 //   5. 初始化环境 (Initialization)
 // ==============================================================================
-if (!fs.existsSync(SHARE_DIR)) {
-    try { fs.mkdirSync(SHARE_DIR); } catch (e) {}
-}
+if (!fs.existsSync(SHARE_DIR)) { try { fs.mkdirSync(SHARE_DIR, { recursive: true }); } catch (e) {} }
 
 // ==============================================================================
 //   6. 工具函数 (Helper Functions)
 // ==============================================================================
 
 /**
- * 下载文件
+ * 下载文件 (内置 http/https)
  */
 const downloadResource = (url, destination) => new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
-    protocol.get(url, res => {
+    const request = protocol.get(url, res => {
         if (res.statusCode === 301 || res.statusCode === 302) {
             if (!res.headers.location) return reject('No redirect location found');
+            console.log(`➡️ Redirecting to: ${res.headers.location}`);
             return downloadResource(res.headers.location, destination).then(resolve).catch(reject);
         }
         if (res.statusCode !== 200) return reject(`Download failed. Status: ${res.statusCode}`);
@@ -83,32 +77,72 @@ const downloadResource = (url, destination) => new Promise((resolve, reject) => 
         const fileStream = fs.createWriteStream(destination);
         res.pipe(fileStream);
         fileStream.on('finish', () => fileStream.close(resolve));
-    }).on('error', reject).setTimeout(30000, () => reject('Download timeout'));
+    }).on('error', reject).setTimeout(30000, () => { request.destroy(); reject('Download timeout'); });
 });
 
 /**
- * 获取 Dufs 最新下载链接
+ * 解压 tar.gz (内置 child_process 调用 tar)
+ */
+const extractTarGz = (archivePath, targetDir, expectedBinName, finalBinPath) => new Promise((resolve, reject) => {
+    if (!fs.existsSync(archivePath)) return reject(`Archive not found: ${archivePath}`);
+
+    console.log(`📦 Extracting ${path.basename(archivePath)}...`);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    
+    const tar = spawn('tar', ['-xzf', archivePath, '-C', targetDir]);
+
+    tar.on('close', (code) => {
+        if (code !== 0) return reject(`tar process failed with code ${code}. Check if 'tar' is installed.`);
+        
+        const findExecutable = (dir, filename) => {
+            try {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        const result = findExecutable(fullPath, filename);
+                        if (result) return result;
+                    } else if (entry.name === filename || entry.name.startsWith(filename + '-')) {
+                        return fullPath;
+                    }
+                }
+            } catch (e) { }
+            return null;
+        };
+
+        const foundPath = findExecutable(targetDir, expectedBinName);
+        if (foundPath) {
+            if (foundPath !== finalBinPath) {
+                fs.renameSync(foundPath, finalBinPath);
+            }
+            fs.chmodSync(finalBinPath, 0o755);
+            resolve(finalBinPath);
+        } else {
+            reject(`Executable ${expectedBinName} not found after extraction.`);
+        }
+    });
+    tar.on('error', (err) => reject(`Failed to run tar: ${err.message}. Check if 'tar' is installed.`));
+});
+
+/**
+ * 远程获取最新 Dufs URL
  */
 const fetchDufsLatestUrl = () => new Promise((resolve) => {
+    const fallback = 'https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz';
     https.get('https://github.com/sigoden/dufs/releases/latest', (res) => {
         try {
             const location = res.headers.location;
             const versionTag = location ? path.basename(location) : 'v0.43.0';
             const versionNum = versionTag.replace('v', '');
             resolve(`https://github.com/sigoden/dufs/releases/download/${versionTag}/dufs-v${versionNum}-x86_64-unknown-linux-musl.tar.gz`);
-        } catch (e) {
-            resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz');
-        }
-    }).on('error', () => resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'));
+        } catch (e) { resolve(fallback); }
+    }).on('error', () => resolve(fallback));
 });
 
 /**
- * 获取 HubProxy 最新下载链接
+ * 远程获取最新 HubProxy URL
  */
 const fetchHubProxyUrl = () => new Promise((resolve) => {
-    console.log('🔍 Checking HubProxy version...');
-    const fallbackUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
-    
+    const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
     const req = https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
         try {
             if (res.statusCode === 200 || res.statusCode === 302) {
@@ -116,55 +150,21 @@ const fetchHubProxyUrl = () => new Promise((resolve) => {
                 if (location) {
                     const tag = path.basename(location);
                     resolve(`https://github.com/sky22333/hubproxy/releases/download/${tag}/hubproxy-${tag}-linux-amd64.tar.gz`);
-                } else {
-                    resolve(fallbackUrl);
-                }
-            } else {
-                resolve(fallbackUrl);
-            }
-        } catch (e) {
-            resolve(fallbackUrl);
-        }
+                } else { resolve(fallback); }
+            } else { resolve(fallback); }
+        } catch (e) { resolve(fallback); }
     });
-    
-    req.on('error', () => resolve(fallbackUrl));
-    req.setTimeout(5000, () => {
-        req.destroy();
-        resolve(fallbackUrl);
-    });
+    req.on('error', () => resolve(fallback));
+    req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
 });
 
 /**
- * 递归查找可执行文件 (处理解压后目录结构不确定的问题)
+ * 推送状态到 Gotify (内置 http/https)
  */
-const findExecutable = (dir, filename) => {
-    try {
-        const files = fs.readdirSync(dir, { withFileTypes: true });
-        for (const file of files) {
-            const fullPath = path.join(dir, file.name);
-            if (file.isDirectory()) {
-                const result = findExecutable(fullPath, filename);
-                if (result) return result;
-            } else {
-                // 匹配文件名，排除压缩包
-                if ((file.name === filename || file.name.startsWith(filename + '-')) && 
-                    !file.name.endsWith('.gz') && 
-                    !file.name.endsWith('.zip')) {
-                    return fullPath;
-                }
-            }
-        }
-    } catch (e) {}
-    return null;
-};
-
-/**
- * 推送状态到 Gotify (使用 JSON Body，Token 在 URL 中，最可靠的方式)
- */
-const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) => {
-    // 检查 Gotify 所需的配置项 (虽然 IS_GOTIFY_ENABLED 为 true，但 URL 和 TOKEN 必须存在)
-    if (!GOTIFY_URL || !GOTIFY_TOKEN) {
-        console.log('⚠️ Gotify is enabled but GOTIFY_URL or GOTIFY_TOKEN is missing. Skipping.');
+const pushToGotify = (dufsUrl, hubUrl) => new Promise((resolve, reject) => {
+    // 检查硬编码的配置是否是占位符
+    if (!GOTIFY_URL || !GOTIFY_TOKEN || GOTIFY_TOKEN.includes('YOUR_GOTIFY')) {
+        console.log('⚠️ Gotify URL/Token is missing or is the placeholder. Skipping notification.');
         return resolve();
     }
 
@@ -173,12 +173,10 @@ const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) =
         "🚀 服务启动成功！",
         `\n[Dufs 文件服务]`,
         `本地: http://localhost:${DUFS_PORT}`,
-        // 注意：由于 IS_DUFS_TUNNEL_ENABLED 为 true，这里 Public URL 仅取决于是否获取到
-        `公网: ${dufsUrl || 'N/A (正在初始化/未获取)'}`,
+        `公网: ${dufsUrl || 'N/A (隧道正在初始化)'}`,
         `\n[HubProxy 镜像]`,
         `本地: http://localhost:${HUBPROXY_PORT}`,
-        // 注意：由于 IS_HUBPROXY_TUNNEL_ENABLED 为 true，这里 Public URL 仅取决于是否获取到
-        `公网: ${hubUrl || 'N/A (正在初始化/未获取)'}`,
+        `公网: ${hubUrl || 'N/A (隧道正在初始化)'}`,
         `\n⏰ Time: ${new Date().toLocaleString()}`
     ].join('\n');
 
@@ -187,31 +185,26 @@ const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) =
         const gotifyHost = url.hostname;
         const gotifyPort = url.port || (url.protocol === 'https:' ? 443 : 80);
         const gotifyProtocol = url.protocol.startsWith('https') ? https : http;
-        
-        // 确保路径以 /message 结尾
         const gotifyPath = url.pathname.replace(/\/$/, '') + '/message';
         
-        // JSON Payload
         const postData = JSON.stringify({
-            title: title,
+            title: `服务状态报告`,
             message: message,
             priority: GOTIFY_PRIORITY
         });
 
-        // 发起请求 (使用 JSON Content-Type)
         const req = gotifyProtocol.request({
             hostname: gotifyHost,
             port: gotifyPort,
-            // 关键：Token 在 URL 查询参数中
             path: `${gotifyPath}?token=${GOTIFY_TOKEN}`, 
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json', // <--- 使用 JSON 格式
+                'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
             }
         }, res => {
             if (res.statusCode >= 200 && res.statusCode < 300) {
-                console.log('✅ Gotify notification sent (JSON Body).');
+                console.log('✅ Gotify notification sent.');
                 resolve();
             } else {
                 let responseBody = '';
@@ -233,157 +226,106 @@ const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) =
 
     } catch (e) {
         console.error('❌ Gotify URL/Token configuration error:', e.message);
-        resolve(); // 忽略 Gotify 错误，不影响主服务启动
+        resolve();
     }
 });
-
 
 // ==============================================================================
 //   7. 主程序逻辑 (Main Execution)
 // ==============================================================================
 
 (async () => {
-    // 用于存储生成的公网地址 (内存存储，不持久化)
     let dufsPublicUrl = '';
     let hubProxyPublicUrl = '';
 
-    // 清理临时目录
+    // 清理并创建临时目录
     if (fs.existsSync(TEMP_DIR)) fs.rmSync(TEMP_DIR, { recursive: true, force: true });
     fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     try {
         console.log('⏳ Initializing services...');
 
-        // --- 1. 下载阶段 (Downloading) ---
-        const dufsDownloadUrl = await fetchDufsLatestUrl();
-        let hubProxyDownloadUrl;
-        try {
-            hubProxyDownloadUrl = await fetchHubProxyUrl();
-        } catch (e) {
-            hubProxyDownloadUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
-        }
+        // --- 1. 下载阶段 ---
+        const [dufsDownloadUrl, hubProxyDownloadUrl] = await Promise.all([
+            fetchDufsLatestUrl(),
+            fetchHubProxyUrl()
+        ]);
 
-        const tasks = [
+        const downloadTasks = [
             downloadResource(dufsDownloadUrl, DUFS_ARCHIVE),
             downloadResource(hubProxyDownloadUrl, HUBPROXY_ARCHIVE)
         ];
 
-        // 只有在 IS_CLOUDFLARED_ENABLED 为 true 时才下载，但现在它被硬编码为 true
+        // 既然 IS_CLOUDFLARED_ENABLED 是 true，就下载
         if (IS_CLOUDFLARED_ENABLED) { 
-            tasks.push(downloadResource(CLOUDFLARED_URL, CLOUDFLARED_EXEC));
+            console.log(`⏬ Downloading Cloudflared...`);
+            downloadTasks.push(downloadResource(CLOUDFLARED_URL, CLOUDFLARED_EXEC));
         }
 
-        await Promise.all(tasks);
+        await Promise.all(downloadTasks);
 
-        // --- 2. 解压与安装阶段 (Extraction & Installation) ---
-        
-        // 安装 Dufs
-        console.log(`📦 Installing Dufs...`);
-        execSync(`tar -xzf ${DUFS_ARCHIVE} -C ${TEMP_DIR}`);
-        const dufsFoundPath = findExecutable(TEMP_DIR, 'dufs');
-        if (dufsFoundPath && dufsFoundPath !== DUFS_EXEC) {
-            fs.renameSync(dufsFoundPath, DUFS_EXEC);
-        }
-        fs.chmodSync(DUFS_EXEC, 0o755);
+        // --- 2. 解压与安装阶段 ---
+        await Promise.all([
+            extractTarGz(DUFS_ARCHIVE, TEMP_DIR, 'dufs', DUFS_EXEC),
+            extractTarGz(HUBPROXY_ARCHIVE, TEMP_DIR, 'hubproxy', HUBPROXY_EXEC)
+                .catch(e => console.warn(`⚠️ HubProxy extraction failed: ${e.message}`)) 
+        ]);
 
-        // 安装 HubProxy
-        console.log(`📦 Installing HubProxy...`);
-        execSync(`tar -xzf ${HUBPROXY_ARCHIVE} -C ${TEMP_DIR}`);
-        const hubFoundPath = findExecutable(TEMP_DIR, 'hubproxy');
-        if (hubFoundPath) {
-            if (hubFoundPath !== HUBPROXY_EXEC) {
-                fs.renameSync(hubFoundPath, HUBPROXY_EXEC);
-            }
-            fs.chmodSync(HUBPROXY_EXEC, 0o755);
-        } else {
-            console.warn('⚠️ HubProxy binary not found.');
-        }
-
-        // 设置 Cloudflared 权限
         if (IS_CLOUDFLARED_ENABLED && fs.existsSync(CLOUDFLARED_EXEC)) {
             fs.chmodSync(CLOUDFLARED_EXEC, 0o755);
         }
 
-        // --- 3. 启动服务阶段 (Starting Services) ---
 
-        // 启动 Dufs (主服务)
+        // --- 3. 启动服务阶段 ---
+
+        // 启动 Dufs
         console.log(`📂 Starting Dufs on port ${DUFS_PORT}...`);
         spawn(DUFS_EXEC, [SHARE_DIR, '-p', String(DUFS_PORT), '-A', '--bind', '0.0.0.0'], {
             stdio: 'inherit',
             detached: true
         }).unref();
 
-        // 启动 HubProxy (副服务)
+        // 启动 HubProxy
         if (fs.existsSync(HUBPROXY_EXEC)) {
             console.log(`🐳 Starting HubProxy on port ${HUBPROXY_PORT}...`);
             spawn(HUBPROXY_EXEC, ['--addr', `:${HUBPROXY_PORT}`], {
                 stdio: 'ignore',
                 detached: true,
-                // 关键: 覆盖环境变量，防止 HubProxy 读取系统的 PORT 导致冲突
-                env: { 
-                    ...process.env, 
-                    PORT: String(HUBPROXY_PORT), 
-                    SERVER_PORT: String(HUBPROXY_PORT) 
-                }
+                env: { ...process.env, PORT: String(HUBPROXY_PORT), SERVER_PORT: String(HUBPROXY_PORT) }
             }).unref();
         }
 
-        // --- 4. 启动隧道阶段 (Starting Tunnels) ---
-        // IS_CLOUDFLARED_ENABLED 现在是硬编码的 true
+        // --- 4. 启动隧道阶段 (Argo) ---
         if (IS_CLOUDFLARED_ENABLED && fs.existsSync(CLOUDFLARED_EXEC)) {
             
-            // Dufs 隧道 (IS_DUFS_TUNNEL_ENABLED 现在是硬编码的 true)
+            // Dufs 隧道 (硬编码为 true)
             if (IS_DUFS_TUNNEL_ENABLED) {
+                // TOKEN/DOMAIN 为空，走临时隧道
                 if (DUFS_TUNNEL_TOKEN && DUFS_TUNNEL_DOMAIN) {
-                    // 固定隧道
                     dufsPublicUrl = `https://${DUFS_TUNNEL_DOMAIN}`;
-                    
-                    spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', DUFS_TUNNEL_TOKEN], { 
-                        stdio: 'ignore', detached: true 
-                    }).unref();
-                    
+                    spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', DUFS_TUNNEL_TOKEN], { stdio: 'ignore', detached: true }).unref();
                     console.log(`🔗 Dufs Tunnel (Fixed): ${dufsPublicUrl}`);
                 } else {
-                    // 临时隧道 (TryCloudflare)
-                    const tunnel = spawn(CLOUDFLARED_EXEC, [
-                        'tunnel', '--url', `http://localhost:${DUFS_PORT}`, 
-                        '--no-autoupdate'
-                    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
+                    const tunnel = spawn(CLOUDFLARED_EXEC, ['tunnel', '--url', `http://localhost:${DUFS_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
                     tunnel.stderr.on('data', d => {
                         const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                        if (match) {
-                            dufsPublicUrl = match[1];
-                            console.log(`🔗 Dufs Tunnel (Temp): ${dufsPublicUrl}`);
-                        }
+                        if (match) { dufsPublicUrl = match[1]; console.log(`🔗 Dufs Tunnel (Temp): ${dufsPublicUrl}`); }
                     });
                 }
             }
 
-            // HubProxy 隧道 (IS_HUBPROXY_TUNNEL_ENABLED 现在是硬编码的 true)
+            // HubProxy 隧道 (硬编码为 true)
             if (IS_HUBPROXY_TUNNEL_ENABLED) {
+                // TOKEN/DOMAIN 为空，走临时隧道
                 if (HUBPROXY_TUNNEL_TOKEN && HUBPROXY_TUNNEL_DOMAIN) {
-                    // 固定隧道
                     hubProxyPublicUrl = `https://${HUBPROXY_TUNNEL_DOMAIN}`;
-
-                    spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', HUBPROXY_TUNNEL_TOKEN], { 
-                        stdio: 'ignore', detached: true 
-                    }).unref();
-
+                    spawn(CLOUDFLARED_EXEC, ['tunnel', 'run', '--token', HUBPROXY_TUNNEL_TOKEN], { stdio: 'ignore', detached: true }).unref();
                     console.log(`🔗 HubProxy Tunnel (Fixed): ${hubProxyPublicUrl}`);
                 } else {
-                    // 临时隧道
-                    const tunnel = spawn(CLOUDFLARED_EXEC, [
-                        'tunnel', '--url', `http://localhost:${HUBPROXY_PORT}`, 
-                        '--no-autoupdate'
-                    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
+                    const tunnel = spawn(CLOUDFLARED_EXEC, ['tunnel', '--url', `http://localhost:${HUBPROXY_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
                     tunnel.stderr.on('data', d => {
                         const match = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                        if (match) {
-                            hubProxyPublicUrl = match[1];
-                            console.log(`🔗 HubProxy Tunnel (Temp): ${hubProxyPublicUrl}`);
-                        }
+                        if (match) { hubProxyPublicUrl = match[1]; console.log(`🔗 HubProxy Tunnel (Temp): ${hubProxyPublicUrl}`); }
                     });
                 }
             }
@@ -394,9 +336,8 @@ const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) =
         process.exit(1);
     }
 
-    // --- 状态打印函数 ---
-    const printServiceStatus = () => {
-        // 物理清屏
+    // --- 5. 状态打印与 Gotify 推送 ---
+    const printServiceStatus = async (isFirstRun = false) => {
         process.stdout.write('\033c');
         
         console.log(`\n========================================`);
@@ -406,47 +347,33 @@ const pushToGotify = (title, dufsUrl, hubUrl) => new Promise((resolve, reject) =
         
         console.log(`\n📂 [Dufs File Manager]`);
         console.log(`   ► Local: http://localhost:${DUFS_PORT}`);
-        if (IS_DUFS_TUNNEL_ENABLED && dufsPublicUrl) {
-            console.log(`   ► Public: ${dufsPublicUrl}`);
-        } else if (IS_DUFS_TUNNEL_ENABLED) {
-            console.log(`   ► Public: (Initializing...)`);
+        if (IS_DUFS_TUNNEL_ENABLED) {
+            console.log(`   ► Public: ${dufsPublicUrl || '(Initializing...)'}`);
         }
 
         console.log(`\n🐳 [HubProxy Docker Mirror]`);
         console.log(`   ► Local: http://localhost:${HUBPROXY_PORT}`);
-        if (IS_HUBPROXY_TUNNEL_ENABLED && hubProxyPublicUrl) {
-            console.log(`   ► Public: ${hubProxyPublicUrl}`);
-        } else if (IS_HUBPROXY_TUNNEL_ENABLED) {
-            console.log(`   ► Public: (Initializing...)`);
+        if (IS_HUBPROXY_TUNNEL_ENABLED) {
+            console.log(`   ► Public: ${hubProxyPublicUrl || '(Initializing...)'}`);
         }
         console.log(`\n========================================\n`);
-    };
 
-    // --- 5. 启动后初次汇总 (修改为 async) ---
-    setTimeout(async () => {
-        // 清理临时文件
-        if (fs.existsSync(TEMP_DIR)) fs.rmSync(TEMP_DIR, { recursive: true, force: true });
-        
-        printServiceStatus();
-
-        // 新增: 推送 Gotify 通知 (IS_GOTIFY_ENABLED 现在是硬编码的 true)
-        if (IS_GOTIFY_ENABLED) {
+        // 仅在首次推送 Gotify
+        if (isFirstRun && IS_GOTIFY_ENABLED) { 
             try {
-                await pushToGotify('Service Status Report', dufsPublicUrl, hubProxyPublicUrl);
-            } catch (e) {
-                // pushToGotify内部已处理错误打印，这里仅捕获
-            }
+                await pushToGotify(dufsPublicUrl, hubProxyPublicUrl);
+            } catch (e) {}
         }
-
+    };
+    
+    // 启动后初次汇总 (30秒延迟给临时隧道获取 URL)
+    setTimeout(async () => {
+        if (fs.existsSync(TEMP_DIR)) fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+        await printServiceStatus(true); // 传入 true 表示首次推送 Gotify
     }, 30000);
 
-    // --- 6. 定时任务 ---
-    
-    // 每 1 小时清屏并显示状态 (3600000 ms)
-    setInterval(printServiceStatus, 3600000);
-
-    // 每 5 分钟简单心跳 (不替代状态板，只是为了保活日志)
+    // 定时任务
+    setInterval(() => printServiceStatus(false), 3600000); // 每 1 小时显示状态
     setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
-
 })();
 // END OF FILE
