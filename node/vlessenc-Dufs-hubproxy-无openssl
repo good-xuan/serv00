@@ -471,6 +471,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   // 每6小时显示一次信息
   setInterval(() => {
+    process.stdout.write('\033c');
     console.log(`\n🕒 Hourly Report: ${new Date().toISOString()}`);
     showDetails();
   }, 21600000);
