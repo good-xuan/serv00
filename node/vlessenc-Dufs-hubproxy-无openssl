@@ -55,6 +55,9 @@ const LINK_NAME = process.env.LINK_NAME || 'Node';
 const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false'; // Dufs 服务开关 (默认开)
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';   // HubProxy 服务开关 (默认开)
 
+//---显示链接---
+const SHOW_SAVED_LINKS = false;
+
 // --- Dufs 认证配置 (独立控制) ---
 const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH !== 'false'; // Dufs 鉴权开关 (默认开)
 const DUFS_USER = process.env.DUFS_USER || 'admin';
@@ -454,7 +457,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
       }
       
-      if (SAVED_LINKS.length > 0) {
+      if (SHOW_SAVED_LINKS && SAVED_LINKS.length > 0) {
           console.log('\n--- Saved Links ---');
           SAVED_LINKS.forEach(link => console.log(link));
           console.log('-------------------\n');
