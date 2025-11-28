@@ -469,11 +469,11 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     showDetails();
   }, 30000);
 
-  // 每小时显示一次信息 (3600000ms)
+  // 每6小时显示一次信息 (3600000ms)
   setInterval(() => {
     console.log(`\n🕒 Hourly Report: ${new Date().toISOString()}`);
     showDetails();
-  }, 3600000);
+  }, 21600000);
 
   // 简单保活 (5分钟)
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
