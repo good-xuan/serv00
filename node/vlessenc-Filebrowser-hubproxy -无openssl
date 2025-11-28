@@ -56,6 +56,9 @@ const LINK_NAME = process.env.LINK_NAME || 'Node';
 const ENABLE_FB = process.env.ENABLE_FB !== 'false';   // 默认开启 Filebrowser
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; // 默认开启 HubProxy
 
+//---显示链接---
+const SHOW_SAVED_LINKS = false;
+
 // --- Filebrowser 认证配置 ---
 const FB_USER = process.env.FB_USER || 'admin';
 let FB_PASSWORD = process.env.FB_PASSWORD || ''; 
@@ -460,7 +463,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
       }
       
-      if (SAVED_LINKS.length > 0) {
+      if (SHOW_SAVED_LINKS && SAVED_LINKS.length > 0) {
           console.log('\n--- Saved Links ---');
           SAVED_LINKS.forEach(link => console.log(link));
           console.log('-------------------\n');
