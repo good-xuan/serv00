@@ -16,7 +16,7 @@ const HUB_TAR = path.join(TMP, 'hub.tar.gz');
 // Filebrowser 相关
 const FB_TAR = path.join(TMP, 'fb.tar.gz');
 const FB_BIN = path.join(TMP, 'filebrowser');
-const FB_DB = path.join(TMP, 'filebrowser.db'); // 每次启动重新生成的临时数据库
+const FB_DB = path.join(TMP, 'filebrowser.db');
 
 const FRPC_BIN = path.join(TMP, 'frpc');
 const FRPC_TAR = path.join(TMP, 'frp.tar.gz');
@@ -29,12 +29,12 @@ const KEY_FILE = path.join(TMP, 'key.pem');
 
 // 持久化文件
 const UUID_FILE = path.join(__dirname, '.uuid');
-const PASSWORD_FILE = path.join(__dirname, '.password'); // 恢复密码持久化文件
+const PASSWORD_FILE = path.join(__dirname, '.password');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 const SHARE_PATH = path.join(__dirname, 'share');
 
-// 内存中存储生成的链接，用于定时显示
+// 内存中存储生成的链接
 const SAVED_LINKS = [];
 
 // ==============================================================================
@@ -52,16 +52,28 @@ const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xra
 const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
+// --- 服务总开关 (新增) ---
+const ENABLE_FB = process.env.ENABLE_FB !== 'false';   // 默认开启 Filebrowser
+const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; // 默认开启 HubProxy
+
+// --- Filebrowser 认证配置 ---
+const FB_USER = process.env.FB_USER || 'admin';
+let FB_PASSWORD = process.env.FB_PASSWORD || ''; 
+
 // --- Argo 开关与配置 ---
 const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; 
+
+// 1. Main Argo (Xray)
 const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false';
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 
+// 2. Filebrowser Argo
 const ENABLE_FB_ARGO = process.env.ENABLE_FB_ARGO !== 'false';
 const FB_ARGO_TOKEN = process.env.FB_ARGO_TOKEN || '';
 const FB_ARGO_DOMAIN = process.env.FB_ARGO_DOMAIN || '';
 
+// 3. HubProxy Argo
 const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';
 const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';
 const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
@@ -96,17 +108,12 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
-// Filebrowser Password (强制鉴权逻辑)
-const FB_USER = process.env.FB_USER || 'admin';
-let FB_PASSWORD = process.env.FB_PASSWORD || '';
-// 1. 如果环境变量没设置，尝试读取文件
+// Filebrowser Password
 if (!FB_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { FB_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
-// 2. 如果文件也没有，生成随机密码
 if (!FB_PASSWORD) {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     for (let i = 0; i < 16; i++) FB_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
 }
-// 3. 保存密码到文件 (持久化)
 try { fs.writeFileSync(PASSWORD_FILE, FB_PASSWORD); } catch(e) {}
 
 // Path
@@ -179,7 +186,7 @@ const getFilebrowserUrl = () => new Promise((resolve) => {
         try {
             if (res.statusCode === 302 && res.headers.location) {
                 const loc = res.headers.location;
-                const tag = path.basename(loc); // v2.30.0
+                const tag = path.basename(loc); 
                 resolve(`https://github.com/filebrowser/filebrowser/releases/download/${tag}/linux-amd64-filebrowser.tar.gz`);
             } else { resolve(fallback); }
         } catch(e) { resolve(fallback); }
@@ -231,7 +238,7 @@ const printLink = (uuid, host, port, remarks, type) => {
   
   const output = `🔗 ${remarks} Link:\n${link}`;
   console.log(`\n${output}\n`);
-  SAVED_LINKS.push(output); // 保存到内存
+  SAVED_LINKS.push(output); 
 };
 
 const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
@@ -258,22 +265,32 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   try {
     console.log('⏳ Downloading binaries...');
-    const fbUrl = await getFilebrowserUrl();
-    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
-    let hubUrl;
-    try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
-    const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+    // 基础下载
+    const downloadList = [download(XRAY_URL, ZIP)];
 
-    const downloadList = [
-        download(XRAY_URL, ZIP),
-        download(fbUrl, FB_TAR),
-        download(hubUrl, HUB_TAR) 
-    ];
+    // 按需下载 Filebrowser
+    if (ENABLE_FB) {
+        const fbUrl = await getFilebrowserUrl();
+        downloadList.push(download(fbUrl, FB_TAR));
+    }
+
+    // 按需下载 HubProxy
+    if (ENABLE_HUB) {
+        let hubUrl;
+        try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
+        downloadList.push(download(hubUrl, HUB_TAR));
+    }
+    
+    // Argo & FRP
+    const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
     if (ENABLE_ARGO) downloadList.push(download(argoUrl, ARGO_BIN));
+    
+    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
     if (frpUrl) {
         console.log(`⏬ Downloading FRP from ${frpUrl}`);
         downloadList.push(download(frpUrl, FRPC_TAR));
     }
+
     await Promise.all(downloadList);
 
     // 1. Xray
@@ -295,20 +312,24 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
     }
 
-    // 2. Filebrowser
-    console.log(`📦 Unzipping Filebrowser...`);
-    execSync(`tar -xzf ${FB_TAR} -C ${TMP}`);
-    const fbFound = findBin(TMP, 'filebrowser');
-    if (fbFound && fbFound !== FB_BIN) fs.renameSync(fbFound, FB_BIN);
-    fs.chmodSync(FB_BIN, 0o755);
+    // 2. Filebrowser (如果开启)
+    if (ENABLE_FB) {
+        console.log(`📦 Unzipping Filebrowser...`);
+        execSync(`tar -xzf ${FB_TAR} -C ${TMP}`);
+        const fbFound = findBin(TMP, 'filebrowser');
+        if (fbFound && fbFound !== FB_BIN) fs.renameSync(fbFound, FB_BIN);
+        fs.chmodSync(FB_BIN, 0o755);
+    }
 
-    // 3. HubProxy
-    console.log(`📦 Unzipping HubProxy...`);
-    execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
-    const hubFound = findBin(TMP, 'hubproxy');
-    if (hubFound) {
-        if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
-        fs.chmodSync(HUB_BIN, 0o755);
+    // 3. HubProxy (如果开启)
+    if (ENABLE_HUB) {
+        console.log(`📦 Unzipping HubProxy...`);
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
+        const hubFound = findBin(TMP, 'hubproxy');
+        if (hubFound) {
+            if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
+            fs.chmodSync(HUB_BIN, 0o755);
+        }
     }
 
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
@@ -341,27 +362,24 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Xray Running on ${PORT}`);
 
-    // 6. Start Filebrowser (Force Auth)
-    console.log(`📂 Configuring Filebrowser on ${WEB_PORT}...`);
-    console.log(`🔒 Auth Info -> User: ${FB_USER}, Password: ${FB_PASSWORD}`);
+    // 6. Start Filebrowser (如果开启)
+    if (ENABLE_FB) {
+        console.log(`📂 Configuring Filebrowser on ${WEB_PORT}...`);
+        console.log(`🔒 Auth Info -> User: ${FB_USER}, Password: ${FB_PASSWORD}`);
 
-    // 6.1 初始化数据库 (每次启动都是新的)
-    execSync(`${FB_BIN} config init -d ${FB_DB}`, { stdio: 'ignore' });
-    // 6.2 设置基本参数
-    execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} -d ${FB_DB}`, { stdio: 'ignore' });
-    // 6.3 强制修改 admin 用户 (数据库新建时默认只有 admin/admin)
-    try {
-        execSync(`${FB_BIN} users update admin --username ${FB_USER} --password ${FB_PASSWORD} --perm.admin -d ${FB_DB}`, { stdio: 'ignore' });
-    } catch (e) {
-        // 以防万一，如果 update 失败尝试 add
-        execSync(`${FB_BIN} users add ${FB_USER} ${FB_PASSWORD} --perm.admin -d ${FB_DB}`, { stdio: 'ignore' });
+        execSync(`${FB_BIN} config init -d ${FB_DB}`, { stdio: 'ignore' });
+        execSync(`${FB_BIN} config set --address 0.0.0.0 --port ${WEB_PORT} --root ${SHARE_PATH} -d ${FB_DB}`, { stdio: 'ignore' });
+        try {
+            execSync(`${FB_BIN} users update admin --username ${FB_USER} --password ${FB_PASSWORD} --perm.admin -d ${FB_DB}`, { stdio: 'ignore' });
+        } catch (e) {
+            execSync(`${FB_BIN} users add ${FB_USER} ${FB_PASSWORD} --perm.admin -d ${FB_DB}`, { stdio: 'ignore' });
+        }
+        
+        spawn(FB_BIN, ['-d', FB_DB], { stdio: 'inherit', detached: true }).unref();
     }
-    
-    // 6.4 启动
-    spawn(FB_BIN, ['-d', FB_DB], { stdio: 'inherit', detached: true }).unref();
 
-    // 7. Start HubProxy
-    if (fs.existsSync(HUB_BIN)) {
+    // 7. Start HubProxy (如果开启)
+    if (ENABLE_HUB && fs.existsSync(HUB_BIN)) {
         console.log(`🐳 HubProxy Running on ${HUB_PORT}`);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore',
@@ -398,8 +416,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 });
             }
         }
-        // Filebrowser
-        if (ENABLE_FB_ARGO) {
+        // Filebrowser (如果服务开启)
+        if (ENABLE_FB && ENABLE_FB_ARGO) {
             if (FB_ARGO_TOKEN && FB_ARGO_DOMAIN) {
                 fbArgoUrl = `https://${FB_ARGO_DOMAIN}`;
                 spawn(ARGO_BIN, ['tunnel', 'run', '--token', FB_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
@@ -411,8 +429,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 });
             }
         }
-        // Hub
-        if (ENABLE_HUB_ARGO) {
+        // HubProxy (如果服务开启)
+        if (ENABLE_HUB && ENABLE_HUB_ARGO) {
             if (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) {
                 hubArgoUrl = `https://${HUB_ARGO_DOMAIN}`;
                 spawn(ARGO_BIN, ['tunnel', 'run', '--token', HUB_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
@@ -432,10 +450,15 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   // 显示详细信息的函数
   const showDetails = () => {
-      console.log(`\n📂 Filebrowser: http://localhost:${WEB_PORT} (User: ${FB_USER}, Pass: ${FB_PASSWORD})`);
-      if (ENABLE_FB_ARGO && fbArgoUrl) console.log(`🔗 FB URL: ${fbArgoUrl}`);
-      console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
-      if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+      if (ENABLE_FB) {
+        console.log(`\n📂 Filebrowser: http://localhost:${WEB_PORT} (User: ${FB_USER}, Pass: ${FB_PASSWORD})`);
+        if (ENABLE_FB_ARGO && fbArgoUrl) console.log(`🔗 FB URL: ${fbArgoUrl}`);
+      }
+      
+      if (ENABLE_HUB) {
+        console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
+        if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+      }
       
       if (SAVED_LINKS.length > 0) {
           console.log('\n--- Saved Links ---');
