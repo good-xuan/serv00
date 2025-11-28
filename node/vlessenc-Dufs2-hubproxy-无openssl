@@ -12,6 +12,8 @@ const ARGO_BIN = path.join(TMP, 'cloudflared'); // Cloudflared Binary
 const CFG = path.join(TMP, 'config.json');
 const ZIP = path.join(TMP, 'xray.zip');
 const HUB_TAR = path.join(TMP, 'hub.tar.gz');
+
+// Dufs 相关
 const DUFS_TAR = path.join(TMP, 'dufs.tar.gz');
 const DUFS_BIN = path.join(TMP, 'dufs');
 
@@ -26,11 +28,12 @@ const KEY_FILE = path.join(TMP, 'key.pem');
 
 // 持久化文件
 const UUID_FILE = path.join(__dirname, '.uuid');
+const PASSWORD_FILE = path.join(__dirname, '.password');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 const SHARE_PATH = path.join(__dirname, 'share');
 
-// 内存中存储生成的链接，用于定时显示
+// 内存中存储生成的链接
 const SAVED_LINKS = [];
 
 // ==============================================================================
@@ -48,24 +51,29 @@ const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xra
 const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
-// --- Dufs 认证配置 (新增) ---
+// --- 服务总开关 ---
+const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false'; // Dufs 服务开关 (默认开)
+const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';   // HubProxy 服务开关 (默认开)
+
+// --- Dufs 认证配置 (独立控制) ---
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH !== 'false'; // Dufs 鉴权开关 (默认开)
 const DUFS_USER = process.env.DUFS_USER || 'admin';
-const DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; // 如果为空则匿名，不为空则开启验证
+let DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; 
 
 // --- Argo 开关与配置 ---
-const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; // 总开关
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; 
 
 // 1. Main Argo (Xray)
 const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false';
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 
-// 2. Dufs Argo (文件服务)
+// 2. Dufs Argo
 const ENABLE_DUFS_ARGO = process.env.ENABLE_DUFS_ARGO !== 'false';
 const DUFS_ARGO_TOKEN = process.env.DUFS_ARGO_TOKEN || '';
 const DUFS_ARGO_DOMAIN = process.env.DUFS_ARGO_DOMAIN || '';
 
-// 3. HubProxy Argo (Docker/Hub 代理)
+// 3. HubProxy Argo
 const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';
 const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';
 const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
@@ -83,16 +91,16 @@ const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';
 const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
 const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
 
-// 判断是否需要 FRP (逻辑：Host && Token && (Domain || Port))
 const NEED_FRP1 = FRPS_HOST && FRPC_TOKEN && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
 const NEED_FRP2 = FRPS2_HOST && FRPC2_TOKEN && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
 const NEED_FRP = NEED_FRP1 || NEED_FRP2;
 
 // ==============================================================================
-//   4. 初始化
+//   4. 初始化 (UUID / Password / Keys)
 // ==============================================================================
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
+// UUID
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!uuid) {
@@ -100,6 +108,15 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
+// Dufs Password
+if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!DUFS_PASSWORD) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < 16; i++) DUFS_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
+}
+try { fs.writeFileSync(PASSWORD_FILE, DUFS_PASSWORD); } catch(e) {}
+
+// Path
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
 if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
@@ -114,6 +131,7 @@ if (!WS_PATH) WS_PATH = genPath();
 if (!XHTTP_PATH) XHTTP_PATH = genPath();
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
+// Keys
 let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
 let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
 if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
@@ -215,7 +233,7 @@ const printLink = (uuid, host, port, remarks, type) => {
   
   const output = `🔗 ${remarks} Link:\n${link}`;
   console.log(`\n${output}\n`);
-  SAVED_LINKS.push(output); // 保存到内存
+  SAVED_LINKS.push(output); 
 };
 
 const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
@@ -242,22 +260,32 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   try {
     console.log('⏳ Downloading binaries...');
-    const dufsUrl = await getDufsLatestUrl();
-    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
-    let hubUrl;
-    try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
-    const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+    // 基础下载
+    const downloadList = [download(XRAY_URL, ZIP)];
 
-    const downloadList = [
-        download(XRAY_URL, ZIP),
-        download(dufsUrl, DUFS_TAR),
-        download(hubUrl, HUB_TAR) 
-    ];
+    // 按需下载 Dufs
+    if (ENABLE_DUFS) {
+        const dufsUrl = await getDufsLatestUrl();
+        downloadList.push(download(dufsUrl, DUFS_TAR));
+    }
+
+    // 按需下载 HubProxy
+    if (ENABLE_HUB) {
+        let hubUrl;
+        try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
+        downloadList.push(download(hubUrl, HUB_TAR));
+    }
+    
+    // Argo & FRP
+    const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
     if (ENABLE_ARGO) downloadList.push(download(argoUrl, ARGO_BIN));
+    
+    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
     if (frpUrl) {
         console.log(`⏬ Downloading FRP from ${frpUrl}`);
         downloadList.push(download(frpUrl, FRPC_TAR));
     }
+
     await Promise.all(downloadList);
 
     // 1. Xray
@@ -279,20 +307,24 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
     }
 
-    // 2. Dufs
-    console.log(`📦 Unzipping Dufs...`);
-    execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`);
-    const dufsFound = findBin(TMP, 'dufs');
-    if (dufsFound && dufsFound !== DUFS_BIN) fs.renameSync(dufsFound, DUFS_BIN);
-    fs.chmodSync(DUFS_BIN, 0o755);
+    // 2. Dufs (如果开启)
+    if (ENABLE_DUFS) {
+        console.log(`📦 Unzipping Dufs...`);
+        execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`);
+        const dufsFound = findBin(TMP, 'dufs');
+        if (dufsFound && dufsFound !== DUFS_BIN) fs.renameSync(dufsFound, DUFS_BIN);
+        fs.chmodSync(DUFS_BIN, 0o755);
+    }
 
-    // 3. HubProxy
-    console.log(`📦 Unzipping HubProxy...`);
-    execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
-    const hubFound = findBin(TMP, 'hubproxy');
-    if (hubFound) {
-        if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
-        fs.chmodSync(HUB_BIN, 0o755);
+    // 3. HubProxy (如果开启)
+    if (ENABLE_HUB) {
+        console.log(`📦 Unzipping HubProxy...`);
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
+        const hubFound = findBin(TMP, 'hubproxy');
+        if (hubFound) {
+            if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
+            fs.chmodSync(HUB_BIN, 0o755);
+        }
     }
 
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
@@ -325,21 +357,23 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Xray Running on ${PORT}`);
 
-    // 6. Start Dufs (Updated: Check for Auth)
-    const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0'];
-    if (DUFS_PASSWORD) {
-        console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
-        // 使用 -a username:password@/:rw 开启读写权限验证
-        dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
-    } else {
-        console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
-        // 使用 -A 开启匿名读写权限
-        dufsArgs.push('-A');
+    // 6. Start Dufs (如果开启)
+    if (ENABLE_DUFS) {
+        const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '-A','--bind', '0.0.0.0'];
+        
+        // 鉴权逻辑：如果开关开启，则使用密码；否则匿名
+        if (ENABLE_DUFS_AUTH) {
+            console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
+            dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
+        } else {
+            console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
+        }
+        
+        spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
     }
-    spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
 
-    // 7. Start HubProxy
-    if (fs.existsSync(HUB_BIN)) {
+    // 7. Start HubProxy (如果开启)
+    if (ENABLE_HUB && fs.existsSync(HUB_BIN)) {
         console.log(`🐳 HubProxy Running on ${HUB_PORT}`);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore',
@@ -376,8 +410,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 });
             }
         }
-        // Dufs
-        if (ENABLE_DUFS_ARGO) {
+        // Dufs (如果服务开启)
+        if (ENABLE_DUFS && ENABLE_DUFS_ARGO) {
             if (DUFS_ARGO_TOKEN && DUFS_ARGO_DOMAIN) {
                 dufsArgoUrl = `https://${DUFS_ARGO_DOMAIN}`;
                 spawn(ARGO_BIN, ['tunnel', 'run', '--token', DUFS_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
@@ -389,8 +423,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 });
             }
         }
-        // Hub
-        if (ENABLE_HUB_ARGO) {
+        // HubProxy (如果服务开启)
+        if (ENABLE_HUB && ENABLE_HUB_ARGO) {
             if (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) {
                 hubArgoUrl = `https://${HUB_ARGO_DOMAIN}`;
                 spawn(ARGO_BIN, ['tunnel', 'run', '--token', HUB_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
@@ -410,12 +444,16 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   // 显示详细信息的函数
   const showDetails = () => {
-      console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (${DUFS_PASSWORD ? 'Auth: ' + DUFS_USER : 'Anonymous'})`);
-      if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Dufs URL: ${dufsArgoUrl}`);
-      console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
-      if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+      if (ENABLE_DUFS) {
+        console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (${ENABLE_DUFS_AUTH ? 'Auth: ' + DUFS_USER : 'Anonymous'})`);
+        if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Dufs URL: ${dufsArgoUrl}`);
+      }
       
-      // 显示之前生成的所有 VLESS 链接
+      if (ENABLE_HUB) {
+        console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
+        if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+      }
+      
       if (SAVED_LINKS.length > 0) {
           console.log('\n--- Saved Links ---');
           SAVED_LINKS.forEach(link => console.log(link));
