@@ -24,7 +24,7 @@ const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
 const CERT_FILE = path.join(TMP, 'cert.pem');
 const KEY_FILE = path.join(TMP, 'key.pem');
 
-// 持久化文件 (仅保留身份凭证，移除域名持久化)
+// 持久化文件
 const UUID_FILE = path.join(__dirname, '.uuid');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
@@ -47,6 +47,10 @@ const XHTTP_PORT = 3101; // Xray xhttp
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+
+// --- Dufs 认证配置 (新增) ---
+const DUFS_USER = process.env.DUFS_USER || 'admin';
+const DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; // 如果为空则匿名，不为空则开启验证
 
 // --- Argo 开关与配置 ---
 const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; // 总开关
@@ -321,9 +325,17 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
     console.log(`🚀 Xray Running on ${PORT}`);
 
-    // 6. Start Dufs
-    console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
-    const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '-A', '--bind', '0.0.0.0'];
+    // 6. Start Dufs (Updated: Check for Auth)
+    const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0'];
+    if (DUFS_PASSWORD) {
+        console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
+        // 使用 -a username:password@/:rw 开启读写权限验证
+        dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
+    } else {
+        console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
+        // 使用 -A 开启匿名读写权限
+        dufsArgs.push('-A');
+    }
     spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
 
     // 7. Start HubProxy
@@ -373,7 +385,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 const t2 = spawn(ARGO_BIN, ['tunnel', '--url', `http://localhost:${WEB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
                 t2.stderr.on('data', d => {
                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                    if (m) dufsArgoUrl = m[1]; // 不再写入文件
+                    if (m) dufsArgoUrl = m[1]; 
                 });
             }
         }
@@ -386,7 +398,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 const t3 = spawn(ARGO_BIN, ['tunnel', '--url', `http://localhost:${HUB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
                 t3.stderr.on('data', d => {
                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                    if (m) hubArgoUrl = m[1]; // 不再写入文件
+                    if (m) hubArgoUrl = m[1]; 
                 });
             }
         }
@@ -398,7 +410,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
   // 显示详细信息的函数
   const showDetails = () => {
-      console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (Anonymous)`);
+      console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (${DUFS_PASSWORD ? 'Auth: ' + DUFS_USER : 'Anonymous'})`);
       if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Dufs URL: ${dufsArgoUrl}`);
       console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
       if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
