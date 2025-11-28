@@ -369,7 +369,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
             console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
         }
         
-        spawn(DUFS_BIN, dufsArgs, { stdio: 'inherit', detached: true }).unref();
+        spawn(DUFS_BIN, dufsArgs, { stdio: 'ignore', detached: true }).unref();
     }
 
     // 7. Start HubProxy (如果开启)
