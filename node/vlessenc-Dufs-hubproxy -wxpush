@@ -469,7 +469,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         const baseUrl = PUSH_URL.endsWith('/') ? PUSH_URL.slice(0, -1) : PUSH_URL;
         const targetUrl = new URL(baseUrl + '/wxsend');
         
-        targetUrl.searchParams.append('title', '服务器通知');
+        targetUrl.searchParams.append('title', '${LINK_NAME}服务器通知');
         targetUrl.searchParams.append('content', content);
         targetUrl.searchParams.append('token', PUSH_TOKEN);
 
