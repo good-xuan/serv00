@@ -87,7 +87,7 @@ const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';
 const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
 
 // --- FRP 配置 ---
-const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
+const FRPS_HOST = process.env.FRPS_HOST || 'us.afrp.net';          
 const FRPS_PORT = process.env.FRPS_PORT || '7000';      
 const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
 const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
@@ -462,7 +462,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
         let content = `🚀 ${LINK_NAME}服务启动成功\n📅 北京时间: ${now}`;
         
-        if (mainArgoUrl) content += `\n🚀 Main: ${mainArgoUrl}`;
+        //if (mainArgoUrl) content += `\n🚀 Main: ${mainArgoUrl}`;
         if (dufsArgoUrl) content += `\n📂 Dufs: ${dufsArgoUrl}`;
         if (hubArgoUrl)  content += `\n🐳 Hub: ${hubArgoUrl}`;
 
