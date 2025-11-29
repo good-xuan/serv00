@@ -42,7 +42,7 @@ const SAVED_LINKS = [];
 // ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 直连 SNI 使用此变量
-const SERVER_IP = process.env.SERVER_IP || '';              // 直连 IP 读取此变量
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';              // 直连 IP 读取此变量
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
 const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';  // 'ws' or 'xhttp'
