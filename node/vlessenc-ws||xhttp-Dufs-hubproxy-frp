@@ -71,7 +71,7 @@ const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
 const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net';          
 const FRPS_PORT = process.env.FRPS_PORT || '7000';      
 const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
-const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';        //(例如: uss1.925a01.v6.navy)   
 const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
 
 const NEED_FRP = FRPS_HOST && FRPC_TOKEN && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
