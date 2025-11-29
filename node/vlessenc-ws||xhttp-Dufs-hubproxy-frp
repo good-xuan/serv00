@@ -10,8 +10,8 @@ const ARGO_BIN = path.join(TMP, 'cloudflared'); // Cloudflared Binary
 
 // 核心端口定义
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); 
-const WEB_PORT = PORT + 1; // Dufs
-const HUB_PORT = PORT + 2; // HubProxy
+const WEB_PORT = PORT + 1; // Dufs (HTTP)
+const HUB_PORT = PORT + 2; // HubProxy (HTTP)
 
 // 配置文件与资源
 const CFG = path.join(TMP, 'config.json');
@@ -22,13 +22,11 @@ const DUFS_BIN = path.join(TMP, 'dufs');
 
 const FRPC_BIN = path.join(TMP, 'frpc');
 const FRPC_TAR = path.join(TMP, 'frp.tar.gz');
-const FRPC_CFG = path.join(TMP, 'frpc.ini'); // 仅保留一个配置文件
+const FRPC_CFG = path.join(TMP, 'frpc.ini'); 
 
-// 证书文件路径
+// 证书与持久化文件
 const CERT_FILE = path.join(TMP, 'cert.pem');
 const KEY_FILE = path.join(TMP, 'key.pem');
-
-// 持久化文件
 const UUID_FILE = path.join(__dirname, '.uuid');
 const PASSWORD_FILE = path.join(__dirname, '.password');
 const KEYS_FILE = path.join(__dirname, '.keys');
@@ -41,16 +39,20 @@ const SAVED_LINKS = [];
 //   2. 外部变量与环境配置
 // ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
-const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 直连 SNI 使用此变量
-const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';              // 直连 IP 读取此变量
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
-const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';  // 'ws' or 'xhttp'
+// 直连配置
+const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; 
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';              
+
+// 协议与开关
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 'ws' or 'xhttp'
 const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; 
 const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false'; 
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';   
 const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; 
 
+// Dufs Auth
 const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true'; 
 const DUFS_USER = process.env.DUFS_USER || 'admin';
 let DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; 
@@ -67,17 +69,23 @@ const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';
 const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';
 const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
 
-// --- FRP 配置 (仅保留一套) ---
+// --- FRP Configuration ---
+// 1. 服务端连接信息
 const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net';          
 const FRPS_PORT = process.env.FRPS_PORT || '7000';      
-const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
-const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';        //(例如: uss1.925a01.v6.navy)   
-const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';        
 
-const NEED_FRP = FRPS_HOST && FRPC_TOKEN && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
+// 2. 服务映射配置
+const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; // Xray (HTTPS/TLS)  //(例如: uss1.925a01.v6.navy)  
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; // Xray TCP Port
+const FRP_DUFS_DOMAIN = process.env.FRP_DUFS_DOMAIN || ''; // Dufs (HTTP)
+const FRP_HUB_DOMAIN  = process.env.FRP_HUB_DOMAIN || '';  // Hub (HTTP)
+
+// 判断是否需要下载和启动 FRP
+const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DOMAIN || FRP_XRAY_DIRECT || FRP_DUFS_DOMAIN || FRP_HUB_DOMAIN);
 
 // ==============================================================================
-//   3. 初始化
+//   3. 初始化 (UUID, Password, Paths, Keys)
 // ==============================================================================
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
@@ -112,7 +120,7 @@ if (!WS_PATH) WS_PATH = genPath();
 if (!XHTTP_PATH) XHTTP_PATH = genPath();
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
-// Keys
+// Keys (ML-KEM)
 let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
 let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
 if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
@@ -124,7 +132,7 @@ if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
 }
 
 // ==============================================================================
-//   4. 辅助函数
+//   4. 辅助函数 (Download, FindBin, PrintLink)
 // ==============================================================================
 const download = (url, dest) => new Promise((resolve, reject) => {
   (url.startsWith('https') ? https : http).get(url, res => {
@@ -209,16 +217,12 @@ const printLink = (uuid, host, port, remarks, type) => {
   const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
   const currentType = XRAY_PROTOCOL === 'xhttp' ? 'xhttp' : 'ws';
   
-  // 1. 纯 XHTTP/WS 直连 (通过 FRP TCP 或直接 IP)
-  // 修改：SNI 使用 CDN_HOST 变量
   if (type === 'direct' || type === 'xhttp' || type === 'tcp') {
       link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=${CDN_HOST}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
   }
-  // 2. HTTPS 域名访问 (FRP HTTPS 或 Argo)
   else if (type === 'https-domain') {
       link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
   }
-  // 3. Argo 专用 (通过 CDN host)
   else if (type === 'argo') {
       link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}#${remarks}`;
   }
@@ -228,18 +232,35 @@ const printLink = (uuid, host, port, remarks, type) => {
   SAVED_LINKS.push(output); 
 };
 
-const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
-    if (!sHost || (!sDomain && !sTcpPort)) return;
-    console.log(`☁️  Starting FRPC -> ${sHost}...`);
-    let ini = `[common]\nserver_addr = ${sHost}\nserver_port = ${sPort}\ntoken = ${sToken}\n`;
-    // 指向唯一的 PORT
-    if (sDomain) ini += `\n[https-${label}-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${sDomain}\nlocal_port = ${PORT}\n`;
-    if (sTcpPort) ini += `\n[tcp-${label}-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${PORT}\nremote_port = ${sTcpPort}\n`;
+// 启动 FRP (整合逻辑)
+const runFrp = () => {
+    if (!NEED_FRP) return;
+    console.log(`☁️  Configuring FRPC -> ${FRPS_HOST}...`);
     
-    fs.writeFileSync(cfgPath, ini);
-    spawn(FRPC_BIN, ['-c', cfgPath], { stdio: 'ignore', detached: true }).unref();
-    if (sDomain) printLink(uuid, sDomain, 443, `${LINK_NAME}-FRP-HTTPS`, 'https-domain');
-    if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-FRP-TCP`, 'direct');
+    const uidSuffix = uuid.substring(0, 6);
+    let ini = `[common]\nserver_addr = ${FRPS_HOST}\nserver_port = ${FRPS_PORT}\ntoken = ${FRPS_TOKEN}\n`;
+
+    // 1. Xray HTTPS (Xray 自带 TLS，所以这里用 type=https)
+    if (ENABLE_XRAY && FRP_XRAY_DOMAIN) {
+        ini += `\n[xray-https-${uidSuffix}]\ntype = https\ncustom_domains = ${FRP_XRAY_DOMAIN}\nlocal_port = ${PORT}\n`;
+        printLink(uuid, FRP_XRAY_DOMAIN, 443, `${LINK_NAME}-FRP-HTTPS`, 'https-domain');
+    }
+    // 2. Xray TCP (Direct)
+    if (ENABLE_XRAY && FRP_XRAY_DIRECT) {
+        ini += `\n[xray-tcp-${uidSuffix}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${PORT}\nremote_port = ${FRP_XRAY_DIRECT}\n`;
+        printLink(uuid, FRPS_HOST, FRP_XRAY_DIRECT, `${LINK_NAME}-FRP-TCP`, 'direct');
+    }
+    // 3. Dufs HTTP (Dufs 是 HTTP 服务，使用 type=http)
+    if (ENABLE_DUFS && FRP_DUFS_DOMAIN) {
+        ini += `\n[dufs-http-${uidSuffix}]\ntype = http\ncustom_domains = ${FRP_DUFS_DOMAIN}\nlocal_port = ${WEB_PORT}\n`;
+    }
+    // 4. HubProxy HTTP (HubProxy 是 HTTP 服务，使用 type=http)
+    if (ENABLE_HUB && FRP_HUB_DOMAIN) {
+        ini += `\n[hub-http-${uidSuffix}]\ntype = http\ncustom_domains = ${FRP_HUB_DOMAIN}\nlocal_port = ${HUB_PORT}\n`;
+    }
+
+    fs.writeFileSync(FRPC_CFG, ini);
+    spawn(FRPC_BIN, ['-c', FRPC_CFG], { stdio: 'ignore', detached: true }).unref();
 };
 
 // ==============================================================================
@@ -274,7 +295,7 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
     if (ENABLE_ARGO) downloadList.push(download(argoUrl, ARGO_BIN));
     
-    const frpUrl = (ENABLE_XRAY && NEED_FRP) ? await getFrpUrl() : '';
+    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
     if (frpUrl) {
         console.log(`⏬ Downloading FRP from ${frpUrl}`);
         downloadList.push(download(frpUrl, FRPC_TAR));
@@ -336,7 +357,6 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
         console.log(`🚀 Xray Running on ${PORT} (${XRAY_PROTOCOL})`);
 
-        // 如果存在 SERVER_IP 环境变量，打印直连 IP 节点
         if (SERVER_IP) {
             printLink(uuid, SERVER_IP, PORT, `${LINK_NAME}-Direct-IP`, 'direct');
         }
@@ -378,15 +398,15 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
 
-    // 4. Start FRP (仅保留一套配置)
-    if (ENABLE_XRAY && NEED_FRP && fs.existsSync(FRPC_TAR)) {
+    // 4. Start FRP
+    if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
         console.log('📦 Unzipping FRPC...');
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
         const frpFound = findBin(TMP, 'frpc');
         if (frpFound) {
             fs.renameSync(frpFound, FRPC_BIN);
             fs.chmodSync(FRPC_BIN, 0o755);
-            startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG, 'FRP');
+            runFrp(); 
         }
     }
 
@@ -440,12 +460,14 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
   const showDetails = () => {
       if (ENABLE_DUFS) {
         console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (${ENABLE_DUFS_AUTH ? 'Auth: ' + DUFS_USER : 'Anonymous'})`);
-        if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Dufs URL: ${dufsArgoUrl}`);
+        if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Argo URL: ${dufsArgoUrl}`);
+        if (FRP_DUFS_DOMAIN) console.log(`☁️  FRP URL: http://${FRP_DUFS_DOMAIN}`);
       }
       
       if (ENABLE_HUB) {
         console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
-        if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+        if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Argo URL: ${hubArgoUrl}`);
+        if (FRP_HUB_DOMAIN) console.log(`☁️  FRP URL: http://${FRP_HUB_DOMAIN}`);
       }
       
       if (SHOW_LINKS && SAVED_LINKS.length > 0) {
