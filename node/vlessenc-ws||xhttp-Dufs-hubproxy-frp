@@ -53,7 +53,7 @@ const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';
 const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; 
 
 // Dufs Auth
-const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true'; 
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true';  // 只有设为 true 才开启验证
 const DUFS_USER = process.env.DUFS_USER || 'admin';
 let DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; 
 
