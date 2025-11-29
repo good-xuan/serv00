@@ -40,7 +40,7 @@ const LINK_NAME = process.env.LINK_NAME || 'Node';
 const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 'ws' or 'xhttp'
 
 // --- 直连 Host (修改：增加 SERVER_IP 支持) ---
-const SERVER_HOST = process.env.SERVER_HOST || process.env.DOMAIN || process.env.SERVER_IP || '127.0.0.1';
+const SERVER_HOST =  process.env.SERVER_IP || '127.0.0.1';
 
 // --- Argo 配置 ---
 const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; 
