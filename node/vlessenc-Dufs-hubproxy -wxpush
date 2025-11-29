@@ -1,0 +1,533 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// ==============================================================================
+//   1. 基础配置
+// ==============================================================================
+const TMP = path.join(__dirname, 'tmp');
+const BIN = path.join(TMP, 'web');            // Xray Binary
+const HUB_BIN = path.join(TMP, 'hub_app');    // HubProxy Binary
+const ARGO_BIN = path.join(TMP, 'cloudflared'); // Cloudflared Binary
+
+// 配置文件与资源
+const CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const HUB_TAR = path.join(TMP, 'hub.tar.gz');
+
+// Dufs 相关
+const DUFS_TAR = path.join(TMP, 'dufs.tar.gz');
+const DUFS_BIN = path.join(TMP, 'dufs');
+
+const FRPC_BIN = path.join(TMP, 'frpc');
+const FRPC_TAR = path.join(TMP, 'frp.tar.gz');
+const FRPC_CFG1 = path.join(TMP, 'frpc1.ini');
+const FRPC_CFG2 = path.join(TMP, 'frpc2.ini');
+
+// 证书文件路径 (由 xray tls cert 生成)
+const CERT_FILE = path.join(TMP, 'cert.pem');
+const KEY_FILE = path.join(TMP, 'key.pem');
+
+// 持久化文件
+const UUID_FILE = path.join(__dirname, '.uuid');
+const PASSWORD_FILE = path.join(__dirname, '.password');
+const KEYS_FILE = path.join(__dirname, '.keys');
+const PATHS_FILE = path.join(__dirname, '.paths');
+const SHARE_PATH = path.join(__dirname, 'share');
+
+// 内存中存储生成的链接
+const SAVED_LINKS = [];
+
+// ==============================================================================
+//   2. 端口分配
+// ==============================================================================
+const WEB_PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // Dufs
+const HUB_PORT = WEB_PORT + 2; // HubProxy
+const PORT = 3100;      // Xray main
+const XHTTP_PORT = 3101; // Xray xhttp
+
+// ==============================================================================
+//   3. 外部变量与环境配置
+// ==============================================================================
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const CDN_HOST = 'www.visa.com.sg';
+const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+
+// --- 推送配置 ---
+const PUSH_URL = process.env.PUSH_URL || 'https://wxpush.xxyiyz.ggff.net';     // 例如 https://your-worker.workers.dev
+const PUSH_TOKEN = process.env.PUSH_TOKEN || ''; // 你的 Token
+
+// --- 服务总开关 ---
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 服务开关 (默认开)
+const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false'; // Dufs 服务开关 (默认开)
+const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';   // HubProxy 服务开关 (默认开)
+
+// --- 显示配置 ---
+const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; // 是否显示节点链接 (默认关)
+
+// --- Dufs 认证配置 ---
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true'; // 只有设为 true 才开启验证
+const DUFS_USER = process.env.DUFS_USER || 'admin';
+let DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; 
+
+// --- Argo 开关与配置 ---
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; 
+
+// 1. Main Argo (Xray)
+const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false';
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+
+// 2. Dufs Argo
+const ENABLE_DUFS_ARGO = process.env.ENABLE_DUFS_ARGO !== 'false';
+const DUFS_ARGO_TOKEN = process.env.DUFS_ARGO_TOKEN || '';
+const DUFS_ARGO_DOMAIN = process.env.DUFS_ARGO_DOMAIN || '';
+
+// 3. HubProxy Argo
+const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';
+const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';
+const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';
+
+// --- FRP 配置 ---
+const FRPS_HOST = process.env.FRPS_HOST || 'hk4.afrp.net';          
+const FRPS_PORT = process.env.FRPS_PORT || '7000';      
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';        
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';           
+const FRPC_XHTTP_PORT = process.env.FRPC_XHTTP_PORT || '';   
+
+const FRPS2_HOST = process.env.FRPS2_HOST || 'uss.afrp.net';          
+const FRPS2_PORT = process.env.FRPS2_PORT || '7000';      
+const FRPC2_TOKEN = process.env.FRPC2_TOKEN || 'afrp.net';        
+const FRPC2_DOMAIN = process.env.FRPC2_DOMAIN || '';         
+const FRPC2_XHTTP_PORT = process.env.FRPC2_XHTTP_PORT || ''; 
+
+const NEED_FRP1 = FRPS_HOST && FRPC_TOKEN && (FRPC_DOMAIN || FRPC_XHTTP_PORT);
+const NEED_FRP2 = FRPS2_HOST && FRPC2_TOKEN && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT);
+const NEED_FRP = NEED_FRP1 || NEED_FRP2;
+
+// ==============================================================================
+//   4. 初始化
+// ==============================================================================
+if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
+
+// UUID
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+}
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// Dufs Password
+if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!DUFS_PASSWORD) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let i = 0; i < 16; i++) DUFS_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
+}
+try { fs.writeFileSync(PASSWORD_FILE, DUFS_PASSWORD); } catch(e) {}
+
+// Path
+let WS_PATH = process.env.WS_PATH || '';
+let XHTTP_PATH = process.env.XHTTP_PATH || '';
+if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
+    try {
+        const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8'));
+        if (!WS_PATH) WS_PATH = storedPaths.ws || '';
+        if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
+    } catch(e) {}
+}
+const genPath = () => '/' + Math.random().toString(36).substring(2, 8);
+if (!WS_PATH) WS_PATH = genPath();
+if (!XHTTP_PATH) XHTTP_PATH = genPath();
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// Keys
+let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
+let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+   try {
+       const storedKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+       if (!DECRYPTION) DECRYPTION = storedKeys.decryption || '';
+       if (!ENCRYPTION) ENCRYPTION = storedKeys.encryption || '';
+   } catch (e) {}
+}
+
+// ==============================================================================
+//   5. 辅助函数
+// ==============================================================================
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// FRP 下载逻辑
+const getFrpUrl = () => new Promise((resolve) => {
+    console.log('🔍 Checking latest FRP version...');
+    const fallbackVer = '0.61.0'; 
+    const fallback = `https://github.com/fatedier/frp/releases/download/v${fallbackVer}/frp_${fallbackVer}_linux_amd64.tar.gz`;
+
+    const req = https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        try {
+            if (res.statusCode === 302 && res.headers.location) {
+                const parts = res.headers.location.split('/');
+                let tag = parts[parts.length - 1]; 
+                if (!tag.startsWith('v')) tag = 'v' + tag;
+                const verNum = tag.replace(/^v/, ''); 
+                resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${verNum}_linux_amd64.tar.gz`);
+            } else { resolve(fallback); }
+        } catch(e) { resolve(fallback); }
+    });
+    req.on('error', () => resolve(fallback));
+    req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
+});
+
+const getDufsLatestUrl = () => new Promise((resolve) => {
+    https.get('https://github.com/sigoden/dufs/releases/latest', (res) => {
+        try {
+            const loc = res.headers.location;
+            const tag = loc ? path.basename(loc) : 'v0.43.0';
+            const ver = tag.replace('v', '');
+            resolve(`https://github.com/sigoden/dufs/releases/download/${tag}/dufs-v${ver}-x86_64-unknown-linux-musl.tar.gz`);
+        } catch(e) { resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'); }
+    }).on('error', () => resolve('https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz'));
+});
+
+const getHubProxyUrl = () => new Promise((resolve) => {
+    console.log('🔍 Checking HubProxy...');
+    const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
+    const req = https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
+        try {
+            if (res.statusCode === 200 || res.statusCode === 302) {
+                 const loc = res.headers.location;
+                 const tag = loc ? path.basename(loc) : 'v1.1.9';
+                 resolve(`https://github.com/sky22333/hubproxy/releases/download/${tag}/hubproxy-${tag}-linux-amd64.tar.gz`);
+            } else { resolve(fallback); }
+        } catch(e) { resolve(fallback); }
+    });
+    req.on('error', () => resolve(fallback));
+    req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
+});
+
+const findBin = (dir, name) => {
+    try {
+        const files = fs.readdirSync(dir, { withFileTypes: true });
+        for (const f of files) {
+            const fullPath = path.join(dir, f.name);
+            if (f.isDirectory()) {
+                const res = findBin(fullPath, name);
+                if (res) return res;
+            } else {
+                if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz') && !f.name.endsWith('.zip')) {
+                    return fullPath;
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
+};
+
+// 打印并保存链接
+const printLink = (uuid, host, port, remarks, type) => {
+  let link = '';
+  if (type === 'xhttp') link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=localhost&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  else if (type === 'https-domain') link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=xhttp&path=${encodeURIComponent(XHTTP_PATH)}&insecure=1#${remarks}`;
+  else if (type === 'argo') link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=ws&path=${encodeURIComponent(WS_PATH)}#${remarks}`;
+  
+  const output = `🔗 ${remarks} Link:\n${link}`;
+  console.log(`\n${output}\n`);
+  SAVED_LINKS.push(output); 
+};
+
+const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPath, label) => {
+    if (!sHost || (!sDomain && !sTcpPort)) return;
+    console.log(`☁️  Starting FRPC [${label}] -> ${sHost}...`);
+    let ini = `[common]\nserver_addr = ${sHost}\nserver_port = ${sPort}\ntoken = ${sToken}\n`;
+    if (sDomain) ini += `\n[https-${label}-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${sDomain}\nlocal_port = ${XHTTP_PORT}\n`;
+    if (sTcpPort) ini += `\n[tcp-${label}-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${XHTTP_PORT}\nremote_port = ${sTcpPort}\n`;
+    fs.writeFileSync(cfgPath, ini);
+    spawn(FRPC_BIN, ['-c', cfgPath], { stdio: 'ignore', detached: true }).unref();
+    if (sDomain) printLink(uuid, sDomain, 443, `${LINK_NAME}-${label}-HTTPS`, 'https-domain');
+    if (sTcpPort) printLink(uuid, sHost, sTcpPort, `${LINK_NAME}-${label}-TCP`, 'xhttp');
+};
+
+// ==============================================================================
+//   6. 主程序
+// ==============================================================================
+
+(async () => {
+  let mainArgoUrl = ''; // 存储主节点 Argo URL
+  let dufsArgoUrl = ''; // 存储 Dufs Argo URL
+  let hubArgoUrl = '';  // 存储 Hub Argo URL
+
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    console.log('⏳ Downloading binaries...');
+    const downloadList = [];
+    
+    // 按需下载 Xray
+    if (ENABLE_XRAY) downloadList.push(download(XRAY_URL, ZIP));
+
+    // 按需下载 Dufs
+    if (ENABLE_DUFS) {
+        const dufsUrl = await getDufsLatestUrl();
+        downloadList.push(download(dufsUrl, DUFS_TAR));
+    }
+
+    // 按需下载 HubProxy
+    if (ENABLE_HUB) {
+        let hubUrl;
+        try { hubUrl = await getHubProxyUrl(); } catch (e) { hubUrl = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz'; }
+        downloadList.push(download(hubUrl, HUB_TAR));
+    }
+    
+    // Argo & FRP
+    const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+    if (ENABLE_ARGO) downloadList.push(download(argoUrl, ARGO_BIN));
+    
+    // 只有在 Xray 开启且需要 FRP 时才下载 FRP (因为 FRP 配置指向 Xray 端口)
+    const frpUrl = (ENABLE_XRAY && NEED_FRP) ? await getFrpUrl() : '';
+    if (frpUrl) {
+        console.log(`⏬ Downloading FRP from ${frpUrl}`);
+        downloadList.push(download(frpUrl, FRPC_TAR));
+    }
+
+    await Promise.all(downloadList);
+
+    // 1. Xray (如果开启)
+    if (ENABLE_XRAY) {
+        console.log('📦 Unzipping Xray...');
+        execSync(`unzip -o ${ZIP} -d ${TMP}`);
+        fs.renameSync(path.join(TMP, 'xray'), BIN); 
+        fs.chmodSync(BIN, 0o755);
+
+        console.log('🔐 Generating certs using Xray...');
+        try {
+            const certJsonStr = execSync(`${BIN} tls cert`, { encoding: 'utf-8' });
+            const certData = JSON.parse(certJsonStr);
+            fs.writeFileSync(CERT_FILE, certData.certificate.join('\n'));
+            fs.writeFileSync(KEY_FILE, certData.key.join('\n'));
+            console.log('✅ Certs generated successfully.');
+        } catch (err) {
+            console.error('⚠️ Xray cert generation failed, creating empty fallbacks.', err.message);
+            if (!fs.existsSync(CERT_FILE)) fs.writeFileSync(CERT_FILE, '');
+            if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
+        }
+        
+        // Keys
+        if (DECRYPTION && ENCRYPTION) {
+            console.log('✅ Using ML-KEM Keys.');
+        } else {
+            console.log('🔑 Generating Keys...');
+            try {
+               const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+               const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+               if (match) {
+                   DECRYPTION = match[1]; ENCRYPTION = match[2];
+                   try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+               }
+            } catch (keyErr) {}
+        }
+        
+        // Configure & Start
+        console.log(`⚙️  Configuring Xray...`);
+        fs.writeFileSync(CFG, JSON.stringify({
+          log: { access: 'none', error: 'none', loglevel: 'none' },
+          inbounds: [
+            { port: PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } } },
+            { port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } } }
+          ],
+          outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+        }));
+        spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+        console.log(`🚀 Xray Running on ${PORT}`);
+    }
+
+    // 2. Dufs (如果开启)
+    if (ENABLE_DUFS) {
+        console.log(`📦 Unzipping Dufs...`);
+        execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`);
+        const dufsFound = findBin(TMP, 'dufs');
+        if (dufsFound && dufsFound !== DUFS_BIN) fs.renameSync(dufsFound, DUFS_BIN);
+        fs.chmodSync(DUFS_BIN, 0o755);
+        
+        // -A 总是添加，确保基础操作权限
+        const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0', '-A'];
+        
+        // 鉴权逻辑
+        if (ENABLE_DUFS_AUTH) {
+            console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
+            dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
+        } else {
+            console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
+        }
+        
+        // stdio: ignore
+        spawn(DUFS_BIN, dufsArgs, { stdio: 'ignore', detached: true }).unref();
+    }
+
+    // 3. HubProxy (如果开启)
+    if (ENABLE_HUB) {
+        console.log(`📦 Unzipping HubProxy...`);
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`);
+        const hubFound = findBin(TMP, 'hubproxy');
+        if (hubFound) {
+            if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
+            fs.chmodSync(HUB_BIN, 0o755);
+        }
+        console.log(`🐳 HubProxy Running on ${HUB_PORT}`);
+        spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
+            stdio: 'ignore',
+            detached: true,
+            env: { ...process.env, PORT: String(HUB_PORT), SERVER_PORT: String(HUB_PORT) }
+        }).unref();
+    }
+
+    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
+
+    // 4. Start FRP (仅当 Xray 开启且需要时)
+    if (ENABLE_XRAY && NEED_FRP && fs.existsSync(FRPC_TAR)) {
+        console.log('📦 Unzipping FRPC...');
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
+        const frpFound = findBin(TMP, 'frpc');
+        if (frpFound) {
+            fs.renameSync(frpFound, FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
+            if (NEED_FRP1) startFrpcInstance(uuid, FRPS_HOST, FRPS_PORT, FRPC_TOKEN, FRPC_DOMAIN, FRPC_XHTTP_PORT, FRPC_CFG1, 'S1');
+            if (NEED_FRP2) startFrpcInstance(uuid, FRPS2_HOST, FRPS2_PORT, FRPC2_TOKEN, FRPC2_DOMAIN, FRPC2_XHTTP_PORT, FRPC_CFG2, 'S2');
+        }
+    }
+
+    // 5. Start Argo Tunnels
+    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
+        // Main (仅当 Xray 开启时)
+        if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
+            if (ARGO_TOKEN && ARGO_DOMAIN) {
+                spawn(ARGO_BIN, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
+                printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
+            } else {
+                const t1 = spawn(ARGO_BIN, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t1.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) {
+                        mainArgoUrl = m[1]; 
+                        printLink(uuid, m[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+                    }
+                });
+            }
+        }
+        // Dufs (如果服务开启)
+        if (ENABLE_DUFS && ENABLE_DUFS_ARGO) {
+            if (DUFS_ARGO_TOKEN && DUFS_ARGO_DOMAIN) {
+                dufsArgoUrl = `https://${DUFS_ARGO_DOMAIN}`;
+                spawn(ARGO_BIN, ['tunnel', 'run', '--token', DUFS_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
+            } else {
+                const t2 = spawn(ARGO_BIN, ['tunnel', '--url', `http://localhost:${WEB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t2.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) dufsArgoUrl = m[1]; 
+                });
+            }
+        }
+        // HubProxy (如果服务开启)
+        if (ENABLE_HUB && ENABLE_HUB_ARGO) {
+            if (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) {
+                hubArgoUrl = `https://${HUB_ARGO_DOMAIN}`;
+                spawn(ARGO_BIN, ['tunnel', 'run', '--token', HUB_ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
+            } else {
+                const t3 = spawn(ARGO_BIN, ['tunnel', '--url', `http://localhost:${HUB_PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+                t3.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                    if (m) hubArgoUrl = m[1]; 
+                });
+            }
+        }
+    }
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  // 发送推送通知 (优化后的文案)
+  const sendPush = () => {
+    if (!PUSH_URL || !PUSH_TOKEN) return;
+    try {
+        const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+        let content = `🚀 ${LINK_NAME}服务启动成功\n📅 北京时间: ${now}`;
+        
+        if (mainArgoUrl) content += `\n🚀 Main: ${mainArgoUrl}`;
+        if (dufsArgoUrl) content += `\n📂 Dufs: ${dufsArgoUrl}`;
+        if (hubArgoUrl)  content += `\n🐳 Hub: ${hubArgoUrl}`;
+
+        const baseUrl = PUSH_URL.endsWith('/') ? PUSH_URL.slice(0, -1) : PUSH_URL;
+        const targetUrl = new URL(baseUrl + '/wxsend');
+        
+        targetUrl.searchParams.append('title', '服务器通知');
+        targetUrl.searchParams.append('content', content);
+        targetUrl.searchParams.append('token', PUSH_TOKEN);
+
+        const options = {
+            method: 'POST', 
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+            },
+            timeout: 10000 
+        };
+
+        const req = (targetUrl.protocol === 'https:' ? https : http).request(targetUrl, options, (res) => {
+            res.resume();
+            if (res.statusCode === 200) console.log('✅ Push notification sent.');
+            else console.log(`⚠️ Push failed with status: ${res.statusCode}`);
+        });
+        
+        req.on('error', (e) => console.error('⚠️ Push error:', e.message));
+        req.end(); 
+    } catch (err) { console.error('⚠️ Failed to construct push request:', err.message); }
+  };
+
+  // 显示详细信息的函数
+  const showDetails = () => {
+      if (ENABLE_DUFS) {
+        console.log(`\n📂 Dufs: http://localhost:${WEB_PORT} (${ENABLE_DUFS_AUTH ? 'Auth: ' + DUFS_USER : 'Anonymous'})`);
+        if (ENABLE_DUFS_ARGO && dufsArgoUrl) console.log(`🔗 Dufs URL: ${dufsArgoUrl}`);
+      }
+      
+      if (ENABLE_HUB) {
+        console.log(`\n🐳 HubProxy: http://localhost:${HUB_PORT}`);
+        if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
+      }
+      
+      // 默认不显示详细链接，除非 SHOW_LINKS=true
+      if (SHOW_LINKS && SAVED_LINKS.length > 0) {
+          console.log('\n--- Saved Links ---');
+          SAVED_LINKS.forEach(link => console.log(link));
+          console.log('-------------------\n');
+      }
+  };
+
+  // 初始清理和显示 (30秒后)
+  setTimeout(() => {
+    process.stdout.write('\033c');
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+    showDetails();
+    sendPush(); 
+  }, 30000);
+
+  // 每6小时显示一次信息 (21600000ms)，每次前清屏
+  setInterval(() => {
+    process.stdout.write('\033c');
+    console.log(`\n🕒 6-Hour Report: ${new Date().toISOString()}`);
+    showDetails();
+  }, 21600000);
+
+  // 简单保活 (5分钟)
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
