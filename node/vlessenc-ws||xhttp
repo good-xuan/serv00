@@ -36,7 +36,7 @@ const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';
 
 // --- 服务器地址 ---
 // 用于生成链接时的 Host 地址，如果不填默认 127.0.0.1
-const SERVER_HOST = process.env.SERVER_HOST || process.env.DOMAIN || '127.0.0.1';
+const SERVER_HOST = process.env.SERVER_IP || process.env.DOMAIN || '127.0.0.1';
 
 // --- 显示配置 ---
 const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; 
