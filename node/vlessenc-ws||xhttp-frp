@@ -1,0 +1,342 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// ==============================================================================
+//   1. 基础配置与端口
+// ==============================================================================
+const TMP = path.join(__dirname, 'tmp');
+const BIN = path.join(TMP, 'web');              // Xray Binary
+const ARGO_BIN = path.join(TMP, 'cloudflared'); // Argo Binary
+const FRPC_BIN = path.join(TMP, 'frpc');        // FRP Binary
+
+// 核心端口定义：Xray 使用
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); 
+
+// 文件路径
+const CFG = path.join(TMP, 'config.json');
+const ZIP = path.join(TMP, 'xray.zip');
+const FRPC_TAR = path.join(TMP, 'frp.tar.gz');
+const FRPC_CFG = path.join(TMP, 'frpc.ini');
+
+// 证书与密钥
+const CERT_FILE = path.join(TMP, 'cert.pem');
+const KEY_FILE = path.join(TMP, 'key.pem');
+const UUID_FILE = path.join(__dirname, '.uuid');
+const KEYS_FILE = path.join(__dirname, '.keys');
+const PATHS_FILE = path.join(__dirname, '.paths');
+
+// 内存中存储生成的链接
+const SAVED_LINKS = [];
+
+// ==============================================================================
+//   2. 外部变量与环境配置
+// ==============================================================================
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+const CDN_HOST = 'www.visa.com.sg'; // Argo 节点伪装域名 & 直连 SNI
+
+// --- 节点名称前缀 ---
+const LINK_NAME = process.env.LINK_NAME || 'Node'; 
+
+// --- 核心协议选择 ---
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 'ws' or 'xhttp'
+
+// --- 直连 Host (修改：增加 SERVER_IP 支持) ---
+const SERVER_HOST = process.env.SERVER_HOST || process.env.DOMAIN || process.env.SERVER_IP || '127.0.0.1';
+
+// --- Argo 配置 ---
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false'; 
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';     // 固定隧道 Token
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';   // 固定隧道域名
+
+// --- FRP 配置 ---
+// 必填项：服务器地址和 Token
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net';       
+const FRPS_PORT = process.env.FRPS_PORT || '7000';   
+const FRPC_TOKEN = process.env.FRPC_TOKEN || 'afrp.net';     
+
+// 选填项：映射方式
+const FRPC_TCP_PORT = process.env.FRPC_TCP_PORT || ''; // 远程 TCP 端口 (例如: 13100)
+const FRPC_DOMAIN = process.env.FRPC_DOMAIN || '';     // 远程 HTTPS 域名 (例如: uss1.925a01.v6.navy)
+
+const NEED_FRP = FRPS_HOST && FRPC_TOKEN && (FRPC_TCP_PORT || FRPC_DOMAIN);
+
+// --- 显示配置 ---
+const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; 
+
+// ==============================================================================
+//   3. 初始化 (UUID/路径/密钥)
+// ==============================================================================
+// UUID
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+}
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// Path
+let WS_PATH = process.env.WS_PATH || '';
+let XHTTP_PATH = process.env.XHTTP_PATH || '';
+if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
+    try {
+        const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8'));
+        if (!WS_PATH) WS_PATH = storedPaths.ws || '';
+        if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
+    } catch(e) {}
+}
+const genPath = () => '/' + Math.random().toString(36).substring(2, 8);
+if (!WS_PATH) WS_PATH = genPath();
+if (!XHTTP_PATH) XHTTP_PATH = genPath();
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// Keys
+let DECRYPTION = process.env.VLESS_DECRYPTION || ''; 
+let ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+   try {
+       const storedKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+       if (!DECRYPTION) DECRYPTION = storedKeys.decryption || '';
+       if (!ENCRYPTION) ENCRYPTION = storedKeys.encryption || '';
+   } catch (e) {}
+}
+
+// ==============================================================================
+//   4. 辅助函数
+// ==============================================================================
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      if (!res.headers.location) return reject('No location');
+      return download(res.headers.location, dest).then(resolve).catch(reject);
+    }
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// 获取 FRP 下载链接
+const getFrpUrl = () => new Promise((resolve) => {
+    console.log('🔍 Checking latest FRP version...');
+    const fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz';
+    const req = https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        try {
+            if (res.statusCode === 302 && res.headers.location) {
+                const parts = res.headers.location.split('/');
+                let tag = parts[parts.length - 1]; 
+                if (!tag.startsWith('v')) tag = 'v' + tag;
+                const verNum = tag.replace(/^v/, ''); 
+                resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${verNum}_linux_amd64.tar.gz`);
+            } else { resolve(fallback); }
+        } catch(e) { resolve(fallback); }
+    });
+    req.on('error', () => resolve(fallback));
+    req.setTimeout(5000, () => { req.destroy(); resolve(fallback); });
+});
+
+const findBin = (dir, name) => {
+    try {
+        const files = fs.readdirSync(dir, { withFileTypes: true });
+        for (const f of files) {
+            const fullPath = path.join(dir, f.name);
+            if (f.isDirectory()) {
+                const res = findBin(fullPath, name);
+                if (res) return res;
+            } else if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz')) {
+                return fullPath;
+            }
+        }
+    } catch (e) {}
+    return null;
+};
+
+// 打印链接
+const printLink = (host, port, remarks, type) => {
+  let link = '';
+  const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
+  const currentType = XRAY_PROTOCOL === 'xhttp' ? 'xhttp' : 'ws';
+  
+  // 1. Argo (Cloudflare CDN)
+  if (type === 'argo') {
+      link = `vless://${uuid}@${CDN_HOST}:443?encryption=${ENCRYPTION}&security=tls&flow=xtls-rprx-vision&sni=${host}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}#${remarks}`;
+  }
+  // 2. HTTPS 域名 (FRP HTTPS)
+  else if (type === 'https') {
+      link = `vless://${uuid}@${host}:443?encryption=${ENCRYPTION}&security=tls&sni=${host}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
+  }
+  // 3. 直连/TCP (IP Direct or FRP TCP)
+  else {
+      // 修改：sni 强制设为 CDN_HOST (www.visa.com.sg)
+      link = `vless://${uuid}@${host}:${port}?encryption=${ENCRYPTION}&security=tls&sni=${CDN_HOST}&flow=xtls-rprx-vision&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
+  }
+  
+  const output = `🔗 ${remarks} Link:\n${link}`;
+  console.log(`\n${output}\n`);
+  SAVED_LINKS.push(output); 
+};
+
+// 启动 FRP 实例
+const startFrp = () => {
+    console.log(`☁️  Starting FRP -> ${FRPS_HOST}...`);
+    let ini = `[common]\nserver_addr = ${FRPS_HOST}\nserver_port = ${FRPS_PORT}\ntoken = ${FRPC_TOKEN}\n`;
+    
+    // TCP 穿透
+    if (FRPC_TCP_PORT) {
+        ini += `\n[tcp-${uuid.substring(0,5)}]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = ${PORT}\nremote_port = ${FRPC_TCP_PORT}\n`;
+    }
+    // HTTPS 穿透 (自定义域名)
+    if (FRPC_DOMAIN) {
+        ini += `\n[https-${uuid.substring(0,5)}]\ntype = https\ncustom_domains = ${FRPC_DOMAIN}\nlocal_port = ${PORT}\n`;
+    }
+
+    fs.writeFileSync(FRPC_CFG, ini);
+    spawn(FRPC_BIN, ['-c', FRPC_CFG], { stdio: 'ignore', detached: true }).unref();
+
+    if (FRPC_TCP_PORT) printLink(FRPS_HOST, FRPC_TCP_PORT, `${LINK_NAME}-FRP-TCP`, 'tcp');
+    if (FRPC_DOMAIN) printLink(FRPC_DOMAIN, 443, `${LINK_NAME}-FRP-HTTPS`, 'https');
+};
+
+// ==============================================================================
+//   5. 主程序
+// ==============================================================================
+
+(async () => {
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+
+  try {
+    console.log('⏳ Downloading binaries...');
+    const downloadList = [];
+    
+    // 1. Xray
+    downloadList.push(download(XRAY_URL, ZIP));
+
+    // 2. Argo (如需)
+    if (ENABLE_ARGO) {
+        const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+        downloadList.push(download(argoUrl, ARGO_BIN));
+    }
+
+    // 3. FRP (如需)
+    if (NEED_FRP) {
+        const frpUrl = await getFrpUrl();
+        console.log(`⏬ Downloading FRP from ${frpUrl}`);
+        downloadList.push(download(frpUrl, FRPC_TAR));
+    }
+
+    await Promise.all(downloadList);
+
+    // --- 安装与配置 Xray ---
+    console.log('📦 Unzipping Xray...');
+    execSync(`unzip -o ${ZIP} -d ${TMP}`);
+    const xrayFound = findBin(TMP, 'xray'); 
+    if (xrayFound) fs.renameSync(xrayFound, BIN);
+    fs.chmodSync(BIN, 0o755);
+
+    console.log('🔐 Generating certs...');
+    try {
+        const certJsonStr = execSync(`${BIN} tls cert`, { encoding: 'utf-8' });
+        const certData = JSON.parse(certJsonStr);
+        fs.writeFileSync(CERT_FILE, certData.certificate.join('\n'));
+        fs.writeFileSync(KEY_FILE, certData.key.join('\n'));
+    } catch (err) {
+        if (!fs.existsSync(CERT_FILE)) fs.writeFileSync(CERT_FILE, '');
+        if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
+    }
+    
+    // 生成密钥
+    if (!DECRYPTION || !ENCRYPTION) {
+        try {
+            const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+            const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+            if (match) {
+                DECRYPTION = match[1]; ENCRYPTION = match[2];
+                try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+            }
+        } catch (keyErr) {}
+    }
+    
+    // 启动 Xray
+    console.log(`⚙️  Configuring Xray (${XRAY_PROTOCOL.toUpperCase()})...`);
+    const streamSettings = XRAY_PROTOCOL === 'xhttp' 
+        ? { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } }
+        : { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } };
+
+    fs.writeFileSync(CFG, JSON.stringify({
+        log: { access: 'none', error: 'none', loglevel: 'none' },
+        inbounds: [
+            { port: PORT, listen: '0.0.0.0', protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: streamSettings }
+        ],
+        outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+    }));
+    
+    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+    console.log(`🚀 Xray Running on ${PORT}`);
+    
+    // 输出直连链接
+    printLink(SERVER_HOST, PORT, `${LINK_NAME}-Direct`, 'direct');
+
+    // --- 启动 FRP ---
+    if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
+        console.log('📦 Unzipping FRP...');
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
+        const frpFound = findBin(TMP, 'frpc');
+        if (frpFound) {
+            fs.renameSync(frpFound, FRPC_BIN);
+            fs.chmodSync(FRPC_BIN, 0o755);
+            startFrp();
+        }
+    }
+
+    // --- 启动 Argo ---
+    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
+        fs.chmodSync(ARGO_BIN, 0o755);
+        
+        if (ARGO_TOKEN && ARGO_DOMAIN) {
+            // 固定隧道
+            console.log('☁️  Starting Argo (Token)...');
+            spawn(ARGO_BIN, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
+            printLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
+        } else {
+            // 临时隧道 (Quick Tunnel)
+            console.log('☁️  Starting Argo (Quick)...');
+            const t = spawn(ARGO_BIN, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            t.stderr.on('data', d => {
+                const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+                if (m) {
+                    const domain = m[1].replace('https://', '');
+                    printLink(domain, 443, `${LINK_NAME}-Argo`, 'argo');
+                }
+            });
+        }
+    }
+
+  } catch (e) {
+    console.error('❌ Fail:', e);
+    process.exit(1);
+  }
+
+  // 定时报告
+  const showDetails = () => {
+      if (SHOW_LINKS && SAVED_LINKS.length > 0) {
+          console.log('\n--- Saved Links ---');
+          SAVED_LINKS.forEach(link => console.log(link));
+          console.log('-------------------\n');
+      }
+  };
+
+  setTimeout(() => {
+    process.stdout.write('\033c');
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    console.log('🧹 Cleaned up');
+    showDetails();
+  }, 30000);
+
+  setInterval(() => {
+    process.stdout.write('\033c');
+    console.log(`\n🕒 Report: ${new Date().toISOString()}`);
+    showDetails();
+  }, 21600000);
+
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
