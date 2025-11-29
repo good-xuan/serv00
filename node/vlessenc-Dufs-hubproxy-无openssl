@@ -52,14 +52,15 @@ const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
 // --- 服务总开关 ---
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 服务开关 (默认开)
 const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false'; // Dufs 服务开关 (默认开)
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false';   // HubProxy 服务开关 (默认开)
 
-//---显示链接---
-const SHOW_SAVED_LINKS = false;
+// --- 显示配置 ---
+const SHOW_LINKS = process.env.SHOW_LINKS === 'true'; // 是否显示节点链接 (默认关)
 
-// --- Dufs 认证配置 (独立控制) ---
-const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH !== 'false'; // Dufs 鉴权开关 (默认开)
+// --- Dufs 认证配置 (修改：默认为 False/关) ---
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true'; // 只有设为 true 才开启验证
 const DUFS_USER = process.env.DUFS_USER || 'admin';
 let DUFS_PASSWORD = process.env.DUFS_PASSWORD || ''; 
 
@@ -99,7 +100,7 @@ const NEED_FRP2 = FRPS2_HOST && FRPC2_TOKEN && (FRPC2_DOMAIN || FRPC2_XHTTP_PORT
 const NEED_FRP = NEED_FRP1 || NEED_FRP2;
 
 // ==============================================================================
-//   4. 初始化 (UUID / Password / Keys)
+//   4. 初始化
 // ==============================================================================
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
@@ -256,15 +257,19 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 // ==============================================================================
 
 (async () => {
-  let dufsArgoUrl = '', hubArgoUrl = '';
+  let mainArgoUrl = ''; // 存储主节点 Argo URL
+  let dufsArgoUrl = ''; // 存储 Dufs Argo URL
+  let hubArgoUrl = '';  // 存储 Hub Argo URL
 
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
 
   try {
     console.log('⏳ Downloading binaries...');
-    // 基础下载
-    const downloadList = [download(XRAY_URL, ZIP)];
+    const downloadList = [];
+    
+    // 按需下载 Xray
+    if (ENABLE_XRAY) downloadList.push(download(XRAY_URL, ZIP));
 
     // 按需下载 Dufs
     if (ENABLE_DUFS) {
@@ -283,7 +288,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     const argoUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
     if (ENABLE_ARGO) downloadList.push(download(argoUrl, ARGO_BIN));
     
-    const frpUrl = NEED_FRP ? await getFrpUrl() : '';
+    // 只有在 Xray 开启且需要 FRP 时才下载 FRP (因为 FRP 配置指向 Xray 端口)
+    const frpUrl = (ENABLE_XRAY && NEED_FRP) ? await getFrpUrl() : '';
     if (frpUrl) {
         console.log(`⏬ Downloading FRP from ${frpUrl}`);
         downloadList.push(download(frpUrl, FRPC_TAR));
@@ -291,23 +297,53 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
 
     await Promise.all(downloadList);
 
-    // 1. Xray
-    console.log('📦 Unzipping Xray...');
-    execSync(`unzip -o ${ZIP} -d ${TMP}`);
-    fs.renameSync(path.join(TMP, 'xray'), BIN); 
-    fs.chmodSync(BIN, 0o755);
+    // 1. Xray (如果开启)
+    if (ENABLE_XRAY) {
+        console.log('📦 Unzipping Xray...');
+        execSync(`unzip -o ${ZIP} -d ${TMP}`);
+        fs.renameSync(path.join(TMP, 'xray'), BIN); 
+        fs.chmodSync(BIN, 0o755);
 
-    console.log('🔐 Generating certs using Xray...');
-    try {
-        const certJsonStr = execSync(`${BIN} tls cert`, { encoding: 'utf-8' });
-        const certData = JSON.parse(certJsonStr);
-        fs.writeFileSync(CERT_FILE, certData.certificate.join('\n'));
-        fs.writeFileSync(KEY_FILE, certData.key.join('\n'));
-        console.log('✅ Certs generated successfully.');
-    } catch (err) {
-        console.error('⚠️ Xray cert generation failed, creating empty fallbacks.', err.message);
-        if (!fs.existsSync(CERT_FILE)) fs.writeFileSync(CERT_FILE, '');
-        if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
+        console.log('🔐 Generating certs using Xray...');
+        try {
+            const certJsonStr = execSync(`${BIN} tls cert`, { encoding: 'utf-8' });
+            const certData = JSON.parse(certJsonStr);
+            fs.writeFileSync(CERT_FILE, certData.certificate.join('\n'));
+            fs.writeFileSync(KEY_FILE, certData.key.join('\n'));
+            console.log('✅ Certs generated successfully.');
+        } catch (err) {
+            console.error('⚠️ Xray cert generation failed, creating empty fallbacks.', err.message);
+            if (!fs.existsSync(CERT_FILE)) fs.writeFileSync(CERT_FILE, '');
+            if (!fs.existsSync(KEY_FILE)) fs.writeFileSync(KEY_FILE, '');
+        }
+        
+        // Keys
+        if (DECRYPTION && ENCRYPTION) {
+            console.log('✅ Using ML-KEM Keys.');
+        } else {
+            console.log('🔑 Generating Keys...');
+            try {
+               const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+               const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+               if (match) {
+                   DECRYPTION = match[1]; ENCRYPTION = match[2];
+                   try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+               }
+            } catch (keyErr) {}
+        }
+        
+        // Configure & Start
+        console.log(`⚙️  Configuring Xray...`);
+        fs.writeFileSync(CFG, JSON.stringify({
+          log: { access: 'none', error: 'none', loglevel: 'none' },
+          inbounds: [
+            { port: PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } } },
+            { port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } } }
+          ],
+          outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
+        }));
+        spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
+        console.log(`🚀 Xray Running on ${PORT}`);
     }
 
     // 2. Dufs (如果开启)
@@ -317,6 +353,20 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         const dufsFound = findBin(TMP, 'dufs');
         if (dufsFound && dufsFound !== DUFS_BIN) fs.renameSync(dufsFound, DUFS_BIN);
         fs.chmodSync(DUFS_BIN, 0o755);
+        
+        // -A 总是添加，确保基础操作权限
+        const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0', '-A'];
+        
+        // 鉴权逻辑
+        if (ENABLE_DUFS_AUTH) {
+            console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
+            dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
+        } else {
+            console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
+        }
+        
+        // 修改为 stdio: 'ignore' 取消子进程输出
+        spawn(DUFS_BIN, dufsArgs, { stdio: 'ignore', detached: true }).unref();
     }
 
     // 3. HubProxy (如果开启)
@@ -328,55 +378,6 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
             if (hubFound !== HUB_BIN) fs.renameSync(hubFound, HUB_BIN);
             fs.chmodSync(HUB_BIN, 0o755);
         }
-    }
-
-    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
-
-    // 4. Keys
-    if (DECRYPTION && ENCRYPTION) {
-        console.log('✅ Using ML-KEM Keys.');
-    } else {
-        console.log('🔑 Generating Keys...');
-        try {
-           const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
-           const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
-           if (match) {
-               DECRYPTION = match[1]; ENCRYPTION = match[2];
-               try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
-           }
-        } catch (keyErr) {}
-    }
-
-    // 5. Start Xray
-    console.log(`⚙️  Configuring Xray...`);
-    fs.writeFileSync(CFG, JSON.stringify({
-      log: { access: 'none', error: 'none', loglevel: 'none' },
-      inbounds: [
-        { port: PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } } },
-        { port: XHTTP_PORT, listen: '127.0.0.1', protocol: 'vless', settings: { clients: [{ id: uuid, flow: "xtls-rprx-vision" }], decryption: DECRYPTION }, streamSettings: { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } } }
-      ],
-      outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
-    }));
-    spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
-    console.log(`🚀 Xray Running on ${PORT}`);
-
-    // 6. Start Dufs (如果开启)
-    if (ENABLE_DUFS) {
-        const dufsArgs = [SHARE_PATH, '-p', String(WEB_PORT), '-A','--bind', '0.0.0.0'];
-        
-        // 鉴权逻辑：如果开关开启，则使用密码；否则匿名
-        if (ENABLE_DUFS_AUTH) {
-            console.log(`🔒 Starting Dufs on ${WEB_PORT} (User: ${DUFS_USER})...`);
-            dufsArgs.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`);
-        } else {
-            console.log(`📂 Starting Dufs on ${WEB_PORT} (Anonymous)...`);
-        }
-        
-        spawn(DUFS_BIN, dufsArgs, { stdio: 'ignore', detached: true }).unref();
-    }
-
-    // 7. Start HubProxy (如果开启)
-    if (ENABLE_HUB && fs.existsSync(HUB_BIN)) {
         console.log(`🐳 HubProxy Running on ${HUB_PORT}`);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore',
@@ -385,8 +386,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         }).unref();
     }
 
-    // 8. Start FRP
-    if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
+    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) fs.chmodSync(ARGO_BIN, 0o755);
+
+    // 4. Start FRP (仅当 Xray 开启且需要时)
+    if (ENABLE_XRAY && NEED_FRP && fs.existsSync(FRPC_TAR)) {
         console.log('📦 Unzipping FRPC...');
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`);
         const frpFound = findBin(TMP, 'frpc');
@@ -398,10 +401,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         }
     }
 
-    // 9. Start Argo Tunnels
+    // 5. Start Argo Tunnels
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
-        // Main
-        if (ENABLE_MAIN_ARGO) {
+        // Main (仅当 Xray 开启时)
+        if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
             if (ARGO_TOKEN && ARGO_DOMAIN) {
                 spawn(ARGO_BIN, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
                 printLink(uuid, ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
@@ -409,7 +412,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
                 const t1 = spawn(ARGO_BIN, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
                 t1.stderr.on('data', d => {
                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
-                    if (m) printLink(uuid, m[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+                    if (m) {
+                        mainArgoUrl = m[1]; 
+                        printLink(uuid, m[1].replace('https://', ''), 443, `${LINK_NAME}-Argo`, 'argo');
+                    }
                 });
             }
         }
@@ -457,7 +463,8 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
         if (ENABLE_HUB_ARGO && hubArgoUrl) console.log(`🔗 Hub URL: ${hubArgoUrl}`);
       }
       
-      if (SHOW_SAVED_LINKS && SAVED_LINKS.length > 0) {
+      // 默认不显示详细链接，除非 SHOW_LINKS=true
+      if (SHOW_LINKS && SAVED_LINKS.length > 0) {
           console.log('\n--- Saved Links ---');
           SAVED_LINKS.forEach(link => console.log(link));
           console.log('-------------------\n');
@@ -472,10 +479,10 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     showDetails();
   }, 30000);
 
-  // 每6小时显示一次信息
+  // 每6小时显示一次信息 (21600000ms)，每次前清屏
   setInterval(() => {
     process.stdout.write('\033c');
-    console.log(`\n🕒 Hourly Report: ${new Date().toISOString()}`);
+    console.log(`\n🕒 6-Hour Report: ${new Date().toISOString()}`);
     showDetails();
   }, 21600000);
 
