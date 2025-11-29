@@ -51,9 +51,9 @@ const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xra
 const CDN_HOST = 'www.visa.com.sg';
 const LINK_NAME = process.env.LINK_NAME || 'Node'; 
 
-// --- Gotify 推送配置 (新增) ---
-const GOTIFY_URL = process.env.GOTIFY_URL || '';     // 例如 https://push.example.com
-const GOTIFY_TOKEN = process.env.GOTIFY_TOKEN || ''; // Gotify App Token
+// --- Gotify 推送配置 ---
+const GOTIFY_URL = process.env.GOTIFY_URL || 'https://gotify.uptk.netlib.re';     // 例如 https://push.example.com
+const GOTIFY_TOKEN = process.env.GOTIFY_TOKEN || 'An7sTEqqrRdXYwn'; // Gotify App Token
 
 // --- 服务总开关 ---
 const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 服务开关 (默认开)
@@ -454,16 +454,20 @@ const startFrpcInstance = (uuid, sHost, sPort, sToken, sDomain, sTcpPort, cfgPat
     process.exit(1);
   }
 
-  // 发送 Gotify 推送 (添加了 User-Agent 修复连接被断开问题)
+  // 发送 Gotify 推送 (使用数组拼接确保换行)
   const sendGotify = () => {
     if (!GOTIFY_URL || !GOTIFY_TOKEN) return;
     try {
         const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-        let content = `📅 时间: ${now}`;
         
-        if (mainArgoUrl) content += `\n\n🚀 **Main**: [${mainArgoUrl}](${mainArgoUrl})`;
-        if (dufsArgoUrl) content += `\n📂 **Dufs**: [${dufsArgoUrl}](${dufsArgoUrl})`;
-        if (hubArgoUrl)  content += `\n🐳 **Hub**: [${hubArgoUrl}](${hubArgoUrl})`;
+        // 使用数组收集内容行
+        const lines = [`📅 **时间**: ${now}`];
+        if (mainArgoUrl) lines.push(`🚀 **Main**: [${mainArgoUrl}](${mainArgoUrl})`);
+        if (dufsArgoUrl) lines.push(`📂 **Dufs**: [${dufsArgoUrl}](${dufsArgoUrl})`);
+        if (hubArgoUrl)  lines.push(`🐳 **Hub**: [${hubArgoUrl}](${hubArgoUrl})`);
+
+        // 使用双换行符拼接，确保 Markdown 正确分段
+        const content = lines.join('\n\n');
 
         const baseUrl = GOTIFY_URL.endsWith('/') ? GOTIFY_URL.slice(0, -1) : GOTIFY_URL;
         const targetUrl = new URL(`${baseUrl}/message?token=${GOTIFY_TOKEN}`);
