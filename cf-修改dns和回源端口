@@ -6,7 +6,7 @@ export default {
     
     // 从环境变量获取配置
     const PASSWORD = env.AUTH_PASSWORD;     // 网页访问密码
-    const API_TOKEN = env.CF_API_TOKEN;     // Cloudflare API 令牌
+    const API_TOKEN = env.CF_API_TOKEN;     // Cloudflare API 令牌 区域.Origin Rules, 区域.DNS
     
     // 请求基本信息
     const url = new URL(request.url);
