@@ -1,0 +1,361 @@
+export default {
+  async fetch(request, env) {
+    // ============================================================
+    // 1. 变量定义与环境配置 (Variables & Configuration)
+    // ============================================================
+    
+    // 从环境变量获取配置
+    const PASSWORD = env.AUTH_PASSWORD;     // 网页访问密码
+    const API_TOKEN = env.CF_API_TOKEN;     // Cloudflare API 令牌
+    
+    // 请求基本信息
+    const url = new URL(request.url);
+    const cookie = request.headers.get("Cookie") || "";
+    
+    // API 基础配置
+    const API_BASE = "https://api.cloudflare.com/client/v4";
+    const HEADERS = {
+      "Authorization": `Bearer ${API_TOKEN}`,
+      "Content-Type": "application/json"
+    };
+
+    // ============================================================
+    // 2. 鉴权逻辑 (Authentication)
+    // ============================================================
+    
+    const isAuthenticated = cookie.includes(`auth=${PASSWORD}`);
+
+    // 未登录处理
+    if (!isAuthenticated) {
+      if (request.method === "POST") {
+        const formData = await request.formData();
+        if (formData.get("password") === PASSWORD) {
+          return new Response("", {
+            status: 302,
+            headers: {
+              "Location": "/",
+              "Set-Cookie": `auth=${PASSWORD}; HttpOnly; Secure; Path=/; Max-Age=604800`, // 7天有效
+            },
+          });
+        } else {
+          return new Response(loginHtml("密码错误"), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+        }
+      }
+      return new Response(loginHtml(), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+    }
+
+    // 登出处理
+    if (url.searchParams.get("logout")) {
+      return new Response("已退出", {
+        status: 302,
+        headers: { "Location": "/", "Set-Cookie": `auth=deleted; HttpOnly; Secure; Path=/; Max-Age=0` },
+      });
+    }
+
+    // ============================================================
+    // 3. 业务核心逻辑 (Main Logic)
+    // ============================================================
+
+    try {
+      // --- A. 获取 Zone 列表 ---
+      // 尽可能获取所有域名 (per_page=500)
+      const zonesReq = await fetch(`${API_BASE}/zones?per_page=500&status=active`, { headers: HEADERS });
+      const zonesData = await zonesReq.json();
+      
+      if (!zonesData.success) throw new Error("无法获取域名列表，请检查 Token 权限 (Zone:Read)");
+      
+      const zones = zonesData.result || [];
+      if (zones.length === 0) return new Response("账号下没有找到活跃域名", { status: 404, headers: { "Content-Type": "text/html;charset=UTF-8" } });
+
+      // --- B. 确定当前操作的 Zone ---
+      let currentZoneId = url.searchParams.get("zoneId");
+      let currentZoneName = "Unknown";
+      
+      const matchedZone = zones.find(z => z.id === currentZoneId);
+      if (matchedZone) {
+        currentZoneName = matchedZone.name;
+      } else if (!currentZoneId && zones.length > 0) {
+        // 默认选中第一个
+        currentZoneId = zones[0].id;
+        currentZoneName = zones[0].name;
+      }
+
+      // -------------------------------------------------
+      // GET 请求：获取数据并渲染页面
+      // -------------------------------------------------
+      if (request.method === "GET") {
+        // 1. 获取 DNS 记录
+        const dnsReq = await fetch(`${API_BASE}/zones/${currentZoneId}/dns_records?per_page=100`, { headers: HEADERS });
+        const dnsData = await dnsReq.json();
+        // 过滤出 A 和 CNAME
+        const dnsRecords = (dnsData.result || []).filter(r => r.type === 'A' || r.type === 'CNAME');
+
+        // 2. 获取 Origin Rules
+        let rules = [];
+        let rulesetId = "";
+        
+        // 2.1 获取规则集入口 (Entrypoint)
+        const entryReq = await fetch(`${API_BASE}/zones/${currentZoneId}/rulesets/phases/http_request_origin/entrypoint`, { headers: HEADERS });
+        const entryData = await entryReq.json();
+
+        // 2.2 获取具体规则详情
+        if (entryData.success && entryData.result) {
+          rulesetId = entryData.result.id;
+          const rulesReq = await fetch(`${API_BASE}/zones/${currentZoneId}/rulesets/${rulesetId}`, { headers: HEADERS });
+          const rulesData = await rulesReq.json();
+          rules = rulesData.result.rules || [];
+        }
+
+        // 3. 数据整合 (DNS + Rule)
+        const listData = dnsRecords.map(dns => {
+          const matchedRule = rules.find(r => r.expression && r.expression.includes(`"${dns.name}"`));
+          return {
+            domain: dns.name,
+            content: dns.content,
+            type: dns.type, 
+            dnsId: dns.id,
+            port: matchedRule && matchedRule.action_parameters ? matchedRule.action_parameters.origin.port : null,
+            ruleId: matchedRule ? matchedRule.id : null,
+            rulesetId: rulesetId
+          };
+        });
+
+        return new Response(mainHtml(zones, currentZoneId, currentZoneName, listData), { 
+            headers: { "Content-Type": "text/html;charset=UTF-8" } 
+        });
+      }
+
+      // -------------------------------------------------
+      // POST 请求：处理增、删、改
+      // -------------------------------------------------
+      if (request.method === "POST") {
+        const formData = await request.formData();
+        const action = formData.get("action");
+        const targetZoneId = formData.get("zoneId") || currentZoneId; 
+        const log = [];
+
+        // >>>>>>> 删除操作 <<<<<<<
+        if (action === "delete") {
+          const dnsId = formData.get("dnsId");
+          const ruleId = formData.get("ruleId");
+          const rulesetId = formData.get("rulesetId");
+          const domain = formData.get("domain");
+
+          log.push(`正在删除: ${domain}`);
+          
+          if (dnsId) {
+            await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records/${dnsId}`, { method: "DELETE", headers: HEADERS });
+          }
+          if (ruleId && rulesetId) {
+            await fetch(`${API_BASE}/zones/${targetZoneId}/rulesets/${rulesetId}/rules/${ruleId}`, { method: "DELETE", headers: HEADERS });
+          }
+          log.push("删除成功！");
+        } 
+        
+        // >>>>>>> 更新/添加操作 <<<<<<<
+        else if (action === "update") {
+          const fullDomain = formData.get("fulldomain").trim(); 
+          const target = formData.get("target").trim();
+          const port = parseInt(formData.get("port"));
+          
+          // 智能识别类型 (IP -> A, Domain -> CNAME)
+          const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(target);
+          const recordType = isIp ? "A" : "CNAME";
+
+          log.push(`[DNS] 识别类型: ${recordType} (${target})`);
+
+          // 1. 检查 DNS 记录是否存在
+          const dnsCheckReq = await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records?name=${fullDomain}`, { headers: HEADERS });
+          const dnsCheck = await dnsCheckReq.json();
+          const existingDns = (dnsCheck.result || []).find(r => r.name === fullDomain && (r.type === 'A' || r.type === 'CNAME'));
+
+          const dnsBody = JSON.stringify({
+            type: recordType,
+            name: fullDomain,
+            content: target,
+            proxied: true,
+            ttl: 1
+          });
+
+          if (existingDns) {
+            if (existingDns.type !== recordType) {
+                // 类型变更: 先删后加
+                log.push(`[DNS] 类型变更 (${existingDns.type} -> ${recordType})，重建记录...`);
+                await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records/${existingDns.id}`, { method: "DELETE", headers: HEADERS });
+                await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records`, { method: "POST", headers: HEADERS, body: dnsBody });
+            } else {
+                // 类型一致: 更新
+                log.push(`[DNS] 更新现有记录...`);
+                await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records/${existingDns.id}`, { method: "PUT", headers: HEADERS, body: dnsBody });
+            }
+          } else {
+            // 新建
+            log.push(`[DNS] 创建新记录...`);
+            await fetch(`${API_BASE}/zones/${targetZoneId}/dns_records`, { method: "POST", headers: HEADERS, body: dnsBody });
+          }
+
+          // 2. 配置 Origin Rule
+          log.push(`[Rules] 配置端口: ${port}`);
+          
+          // 获取入口
+          const entryReq = await fetch(`${API_BASE}/zones/${targetZoneId}/rulesets/phases/http_request_origin/entrypoint`, { headers: HEADERS });
+          const entryData = await entryReq.json();
+          
+          if (!entryData.success) throw new Error("未找到规则集 (需要 Zone Rulesets: Edit 权限)");
+          
+          const rulesetId = entryData.result.id;
+          
+          // 获取规则列表以检查重复
+          const rulesDetailReq = await fetch(`${API_BASE}/zones/${targetZoneId}/rulesets/${rulesetId}`, { headers: HEADERS });
+          const rulesDetail = await rulesDetailReq.json();
+          const currentRules = rulesDetail.result.rules || [];
+
+          const targetExpression = `(http.host eq "${fullDomain}")`;
+          const existingRule = currentRules.find(r => r.expression.includes(targetExpression));
+          
+          const rulePayload = JSON.stringify({
+            action: "route",
+            action_parameters: { origin: { port: port } },
+            expression: targetExpression,
+            description: `Auto: ${fullDomain} -> :${port}`,
+            enabled: true
+          });
+
+          if (existingRule) {
+            const upRes = await fetch(`${API_BASE}/zones/${targetZoneId}/rulesets/${rulesetId}/rules/${existingRule.id}`, { method: "PATCH", headers: HEADERS, body: rulePayload });
+             if(!(await upRes.json()).success) throw new Error("规则更新失败");
+          } else {
+            const crRes = await fetch(`${API_BASE}/zones/${targetZoneId}/rulesets/${rulesetId}/rules`, { method: "POST", headers: HEADERS, body: rulePayload });
+            if(!(await crRes.json()).success) throw new Error("规则创建失败");
+          }
+          log.push("配置更新成功！");
+        }
+
+        return new Response(resultHtml(log, currentZoneId), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+      }
+    } catch (e) {
+        return new Response(`Error: ${e.message}`, { status: 500, headers: { "Content-Type": "text/html;charset=UTF-8" } });
+    }
+    return new Response("Unexpected Error", { status: 500 });
+  },
+};
+
+// ============================================================
+// 4. HTML 模板 (Templates)
+// ============================================================
+
+function loginHtml(msg) {
+  return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;background:#f4f4f4}.box{background:white;padding:2rem;border-radius:8px;box-shadow:0 2px 5px rgba(0,0,0,0.1);width:300px}input,button{width:100%;padding:10px;margin:5px 0}button{background:#0070f3;color:white;border:none;cursor:pointer}</style></head><body><div class="box"><h3>登录</h3>${msg?`<div style="color:red">${msg}</div>`:''}<form method="POST"><input type="password" name="password" placeholder="密码"><button>确定</button></form></div></body></html>`;
+}
+
+function mainHtml(zones, currentZoneId, currentZoneName, listData) {
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CF Manager</title>
+    <style>
+      body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 1rem auto; padding: 1rem; background-color: #f7f7f7; }
+      .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px; }
+      h2, h3 { margin-top: 0; color: #333; }
+      label { font-weight: 600; display: block; margin-top: 10px; color: #555; font-size: 0.9rem; }
+      input, select { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background: white;}
+      button { width: 100%; padding: 12px; margin-top: 15px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+      .btn-primary { background: #0070f3; color: white; }
+      .btn-primary:hover { background: #005bb5; }
+      .btn-danger { background: #e00; color: white; padding: 6px 12px; font-size: 0.8rem; margin-top:0; width: auto;}
+      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+      .zone-selector { background: #e6f7ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #91d5ff; }
+      
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+      th, td { text-align: left; padding: 10px; border-bottom: 1px solid #eee; }
+      th { color: #888; font-weight: 600; }
+      .tag { display: inline-block; padding: 2px 6px; background: #eee; border-radius: 4px; font-size: 0.8rem; font-weight:bold; }
+      .tag-green { background: #e6fffa; color: #0070f3; }
+      .tag-type { background: #f0f0f0; color: #555; margin-right: 5px; }
+      .tag-cname { background: #fff7e6; color: #d46b08; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+        <h2>DNS & 端口管理</h2>
+        <a href="/?logout=true" style="color:#666;text-decoration:none;font-size:0.9rem">退出</a>
+    </div>
+
+    <div class="zone-selector">
+        <label style="margin-top:0">当前管理的域名 (Zone):</label>
+        <select onchange="window.location.href='/?zoneId='+this.value">
+            ${zones.map(z => `<option value="${z.id}" ${z.id === currentZoneId ? 'selected' : ''}>${z.name}</option>`).join('')}
+        </select>
+    </div>
+
+    <div class="card">
+      <h3>新建 / 更新 (${currentZoneName})</h3>
+      <form method="POST">
+        <input type="hidden" name="action" value="update">
+        <input type="hidden" name="zoneId" value="${currentZoneId}">
+        
+        <label>完整域名 (Hostname)</label>
+        <input type="text" name="fulldomain" placeholder="例如: app.${currentZoneName}" required>
+        
+        <label>目标 (Target)</label>
+        <input type="text" name="target" placeholder="IP (1.2.3.4) 或 域名 (cname.example.com)" required>
+        
+        <label>回源端口</label>
+        <input type="number" name="port" placeholder="例如: 8080" required>
+        
+        <button type="submit" class="btn-primary">应用配置</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>配置列表 (${listData.length})</h3>
+      ${listData.length === 0 ? '<p style="color:#888">暂无记录</p>' : `
+      <table>
+        <thead>
+          <tr>
+            <th>域名 / 内容</th>
+            <th>端口规则</th>
+            <th style="text-align:right">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${listData.map(item => `
+          <tr>
+            <td>
+              <div style="font-weight:bold">${item.domain}</div>
+              <div style="color:#666;font-size:0.85rem;margin-top:2px;">
+                <span class="tag tag-type ${item.type === 'CNAME' ? 'tag-cname' : ''}">${item.type}</span>${item.content}
+              </div>
+            </td>
+            <td>
+              ${item.port 
+                ? `<span class="tag tag-green">➡ :${item.port}</span>` 
+                : `<span class="tag">Default</span>`}
+            </td>
+            <td style="text-align:right">
+              <form method="POST" onsubmit="return confirm('确定要删除 ${item.domain} 吗？');" style="display:inline;">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="zoneId" value="${currentZoneId}">
+                <input type="hidden" name="dnsId" value="${item.dnsId || ''}">
+                <input type="hidden" name="ruleId" value="${item.ruleId || ''}">
+                <input type="hidden" name="rulesetId" value="${item.rulesetId || ''}">
+                <input type="hidden" name="domain" value="${item.domain}">
+                <button type="submit" class="btn-danger">删除</button>
+              </form>
+            </td>
+          </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      `}
+    </div>
+  </body>
+  </html>
+  `;
+}
+
+function resultHtml(logs, zoneId) {
+  return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:monospace;max-width:600px;margin:2rem auto;padding:1rem;background:#f4f4f4}ul{padding-left:10px;list-style:none}li{margin-bottom:8px;padding:8px;background:white;border-left:4px solid #0070f3}a{display:block;text-align:center;margin-top:20px;text-decoration:none;background:#333;color:white;padding:10px;border-radius:4px}</style></head><body><h3>执行结果：</h3><ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul><a href="/?zoneId=${zoneId}">返回列表</a></body></html>`;
+}
