@@ -1,0 +1,457 @@
+import os
+import sys
+import json
+import time
+import uuid
+import shutil
+import random
+import socket
+import struct
+import subprocess
+import threading
+import urllib.request
+import urllib.error
+import zipfile
+import tarfile
+from urllib.parse import quote
+
+# ==============================================================================
+#   1. 基础配置与端口
+# ==============================================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TMP = os.path.join(BASE_DIR, 'tmp')
+BIN = os.path.join(TMP, 'web')              # Xray Binary
+ARGO_BIN = os.path.join(TMP, 'cloudflared') # Argo Binary
+FRPC_BIN = os.path.join(TMP, 'frpc')        # FRP Binary
+
+# 核心端口
+PORT = int(os.environ.get('SERVER_PORT', os.environ.get('PORT', 3000)))
+
+# 文件路径
+CFG = os.path.join(TMP, 'config.json')
+ZIP = os.path.join(TMP, 'xray.zip')
+FRPC_TAR = os.path.join(TMP, 'frp.tar.gz')
+FRPC_CFG = os.path.join(TMP, 'frpc.ini')
+
+# 证书与密钥
+CERT_FILE = os.path.join(TMP, 'cert.pem')
+KEY_FILE = os.path.join(TMP, 'key.pem')
+UUID_FILE = os.path.join(BASE_DIR, '.uuid')
+KEYS_FILE = os.path.join(BASE_DIR, '.keys')
+PATHS_FILE = os.path.join(BASE_DIR, '.paths')
+
+# 内存中存储生成的链接
+SAVED_LINKS = []
+
+# ==============================================================================
+#   2. 外部变量与环境配置
+# ==============================================================================
+XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip'
+CDN_HOST = 'www.visa.com.sg'
+
+# --- 节点名称前缀 ---
+LINK_NAME = os.environ.get('LINK_NAME', 'Node')
+
+# --- 核心协议选择 ---
+XRAY_PROTOCOL = os.environ.get('XRAY_PROTOCOL', 'ws') # 'ws' or 'xhttp'
+
+# --- 后量子密码控制 ---
+# 默认为 true，若要关闭请设置 ENABLE_PQ=false
+ENABLE_PQ = os.environ.get('ENABLE_PQ', 'true').lower() != 'false'
+
+# --- Flow 与 Decryption 逻辑 ---
+# 开启 PQ 时使用 xtls-rprx-vision，关闭时为空
+FLOW = 'xtls-rprx-vision' if ENABLE_PQ else ''
+
+# --- 直连 Host ---
+SERVER_HOST = os.environ.get('SERVER_IP', '127.0.0.1')
+
+# --- Argo 配置 ---
+ENABLE_ARGO = os.environ.get('ENABLE_ARGO', 'true').lower() != 'false'
+ARGO_TOKEN = os.environ.get('ARGO_TOKEN', '')
+ARGO_DOMAIN = os.environ.get('ARGO_DOMAIN', '')
+
+# --- FRP 配置 ---
+FRPS_HOST = os.environ.get('FRPS_HOST', 'uss.afrp.net')
+FRPS_PORT = os.environ.get('FRPS_PORT', '7000')
+FRPC_TOKEN = os.environ.get('FRPC_TOKEN', 'afrp.net')
+
+FRPC_TCP_PORT = os.environ.get('FRPC_TCP_PORT', '')
+FRPC_DOMAIN = os.environ.get('FRPC_DOMAIN', '')
+
+NEED_FRP = bool(FRPS_HOST and FRPC_TOKEN and (FRPC_TCP_PORT or FRPC_DOMAIN))
+SHOW_LINKS = os.environ.get('SHOW_LINKS', 'false').lower() == 'true'
+
+# ==============================================================================
+#   3. 初始化 (UUID/路径/密钥)
+# ==============================================================================
+
+# 1. UUID
+user_uuid = os.environ.get('UUID', '')
+if not user_uuid and os.path.exists(UUID_FILE):
+    try:
+        with open(UUID_FILE, 'r') as f:
+            user_uuid = f.read().strip()
+    except: pass
+
+if not user_uuid:
+    user_uuid = str(uuid.uuid4())
+
+try:
+    with open(UUID_FILE, 'w') as f:
+        f.write(user_uuid)
+except: pass
+
+# 2. Path
+WS_PATH = os.environ.get('WS_PATH', '')
+XHTTP_PATH = os.environ.get('XHTTP_PATH', '')
+
+if (not WS_PATH or not XHTTP_PATH) and os.path.exists(PATHS_FILE):
+    try:
+        with open(PATHS_FILE, 'r') as f:
+            stored_paths = json.load(f)
+            if not WS_PATH: WS_PATH = stored_paths.get('ws', '')
+            if not XHTTP_PATH: XHTTP_PATH = stored_paths.get('xhttp', '')
+    except: pass
+
+def gen_path():
+    return '/' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))
+
+if not WS_PATH: WS_PATH = gen_path()
+if not XHTTP_PATH: XHTTP_PATH = gen_path()
+
+try:
+    with open(PATHS_FILE, 'w') as f:
+        json.dump({"ws": WS_PATH, "xhttp": XHTTP_PATH}, f)
+except: pass
+
+# 3. Keys (仅在 ENABLE_PQ 为 True 时处理)
+DECRYPTION = ''
+ENCRYPTION = ''
+
+if ENABLE_PQ:
+    DECRYPTION = os.environ.get('VLESS_DECRYPTION', '')
+    ENCRYPTION = os.environ.get('VLESS_ENCRYPTION', '')
+
+    if (not DECRYPTION or not ENCRYPTION) and os.path.exists(KEYS_FILE):
+        try:
+            with open(KEYS_FILE, 'r') as f:
+                stored_keys = json.load(f)
+                if not DECRYPTION: DECRYPTION = stored_keys.get('decryption', '')
+                if not ENCRYPTION: ENCRYPTION = stored_keys.get('encryption', '')
+        except: pass
+
+# ==============================================================================
+#   4. 辅助函数
+# ==============================================================================
+
+def download_file(url, dest):
+    """Downloads a file using urllib."""
+    try:
+        # Handling redirects automatically is standard in urllib.request
+        with urllib.request.urlopen(url, timeout=30) as response, open(dest, 'wb') as out_file:
+            shutil.copyfileobj(response, out_file)
+    except Exception as e:
+        print(f"Failed to download {url}: {e}")
+        raise
+
+def get_frp_url():
+    """Fetches the latest FRP release URL."""
+    print('🔍 Checking latest FRP version...')
+    fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz'
+    try:
+        # Check redirects to find version
+        req = urllib.request.Request('https://github.com/fatedier/frp/releases/latest', method='HEAD')
+        with urllib.request.urlopen(req, timeout=5) as res:
+            final_url = res.geturl()
+            # GitHub usually redirects .../latest to .../tag/vX.Y.Z
+            if '/tag/' in final_url:
+                tag = final_url.split('/')[-1]
+                if not tag.startswith('v'): tag = 'v' + tag
+                ver_num = tag.lstrip('v')
+                return f'https://github.com/fatedier/frp/releases/download/{tag}/frp_{ver_num}_linux_amd64.tar.gz'
+            return fallback
+    except:
+        return fallback
+
+def find_bin(directory, name):
+    """Recursively finds a binary file."""
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if (file == name or file.startswith(name + '-')) and not file.endswith('.gz'):
+                return os.path.join(root, file)
+    return None
+
+def print_link(host, port, remarks, link_type):
+    """Generates and prints the VLESS link."""
+    link = ''
+    current_path = XHTTP_PATH if XRAY_PROTOCOL == 'xhttp' else WS_PATH
+    current_type = 'xhttp' if XRAY_PROTOCOL == 'xhttp' else 'ws'
+    
+    # 构造 encryption 参数 (仅在 PQ 开启且有 Key 时)
+    enc_param = f"encryption={ENCRYPTION}&" if (ENABLE_PQ and ENCRYPTION) else ""
+    
+    # 1. Argo
+    if link_type == 'argo':
+        link = (f"vless://{user_uuid}@{CDN_HOST}:443?{enc_param}security=tls&flow={FLOW}"
+                f"&sni={host}&fp=firefox&alpn=h2&type={current_type}"
+                f"&path={quote(current_path)}#{remarks}")
+    
+    # 2. HTTPS (FRP)
+    elif link_type == 'https':
+        link = (f"vless://{user_uuid}@{host}:443?{enc_param}security=tls&sni={host}"
+                f"&flow={FLOW}&fp=firefox&alpn=h2&type={current_type}"
+                f"&path={quote(current_path)}&insecure=1#{remarks}")
+    
+    # 3. Direct/TCP
+    else:
+        link = (f"vless://{user_uuid}@{host}:{port}?{enc_param}security=tls&sni={CDN_HOST}"
+                f"&flow={FLOW}&fp=firefox&alpn=h2&type={current_type}"
+                f"&path={quote(current_path)}&insecure=1#{remarks}")
+
+    output = f"🔗 {remarks} Link:\n{link}"
+    print(f"\n{output}\n")
+    SAVED_LINKS.append(output)
+
+def start_frp():
+    """Configures and starts FRP."""
+    print(f"☁️  Starting FRP -> {FRPS_HOST}...")
+    ini_content = f"""[common]
+server_addr = {FRPS_HOST}
+server_port = {FRPS_PORT}
+token = {FRPC_TOKEN}
+"""
+    if FRPC_TCP_PORT:
+        ini_content += f"""
+[tcp-{user_uuid[:5]}]
+type = tcp
+local_ip = 127.0.0.1
+local_port = {PORT}
+remote_port = {FRPC_TCP_PORT}
+"""
+    if FRPC_DOMAIN:
+        ini_content += f"""
+[https-{user_uuid[:5]}]
+type = https
+custom_domains = {FRPC_DOMAIN}
+local_port = {PORT}
+"""
+    with open(FRPC_CFG, 'w') as f:
+        f.write(ini_content)
+    
+    subprocess.Popen([FRPC_BIN, '-c', FRPC_CFG], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    if FRPC_TCP_PORT:
+        print_link(FRPS_HOST, FRPC_TCP_PORT, f"{LINK_NAME}-FRP-TCP", 'tcp')
+    if FRPC_DOMAIN:
+        print_link(FRPC_DOMAIN, 443, f"{LINK_NAME}-FRP-HTTPS", 'https')
+
+# ==============================================================================
+#   5. 主程序逻辑
+# ==============================================================================
+
+def main():
+    # 清理旧环境
+    if os.path.exists(TMP):
+        shutil.rmtree(TMP, ignore_errors=True)
+    os.makedirs(TMP, exist_ok=True)
+
+    try:
+        print('⏳ Downloading binaries...')
+        
+        # 多线程下载以加快速度
+        threads = []
+        threads.append(threading.Thread(target=download_file, args=(XRAY_URL, ZIP)))
+        
+        if ENABLE_ARGO:
+            argo_url = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64'
+            threads.append(threading.Thread(target=download_file, args=(argo_url, ARGO_BIN)))
+            
+        frp_url = ""
+        if NEED_FRP:
+            frp_url = get_frp_url()
+            print(f"⏬ Downloading FRP from {frp_url}")
+            threads.append(threading.Thread(target=download_file, args=(frp_url, FRPC_TAR)))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # --- 安装与配置 Xray ---
+        print('📦 Unzipping Xray...')
+        with zipfile.ZipFile(ZIP, 'r') as zip_ref:
+            zip_ref.extractall(TMP)
+        
+        xray_found = find_bin(TMP, 'xray')
+        if xray_found:
+            shutil.move(xray_found, BIN)
+        
+        os.chmod(BIN, 0o755)
+
+        print('🔐 Generating certs...')
+        # 生成自签名证书
+        try:
+            cmd_out = subprocess.check_output([BIN, 'tls', 'cert'], text=True)
+            cert_data = json.loads(cmd_out)
+            with open(CERT_FILE, 'w') as f: f.write('\n'.join(cert_data['certificate']))
+            with open(KEY_FILE, 'w') as f: f.write('\n'.join(cert_data['key']))
+        except Exception as e:
+            # Fallback creation
+            open(CERT_FILE, 'w').close()
+            open(KEY_FILE, 'w').close()
+
+        # 生成/检查 ML-KEM 密钥
+        global DECRYPTION, ENCRYPTION
+        if ENABLE_PQ and (not DECRYPTION or not ENCRYPTION):
+            try:
+                print('🔐 Generating ML-KEM Keys...')
+                cmd_out = subprocess.check_output([BIN, 'vlessenc'], text=True)
+                # 简单解析输出
+                import re
+                d_match = re.search(r'"decryption":\s*"([^"]+)"', cmd_out)
+                e_match = re.search(r'"encryption":\s*"([^"]+)"', cmd_out)
+                if d_match and e_match:
+                    DECRYPTION = d_match.group(1)
+                    ENCRYPTION = e_match.group(1)
+                    with open(KEYS_FILE, 'w') as f:
+                        json.dump({"decryption": DECRYPTION, "encryption": ENCRYPTION}, f)
+            except Exception as e:
+                print('⚠️ Failed to generate ML-KEM keys, falling back to standard VLESS.')
+
+        # 启动 Xray
+        print(f"⚙️  Configuring Xray ({XRAY_PROTOCOL.upper()}) | PQ: {ENABLE_PQ} | Flow: {FLOW or 'none'}...")
+        
+        stream_settings = {}
+        if XRAY_PROTOCOL == 'xhttp':
+            stream_settings = {
+                "network": "xhttp",
+                "security": "tls",
+                "tlsSettings": {"certificates": [{"certificateFile": CERT_FILE, "keyFile": KEY_FILE}]},
+                "xhttpSettings": {"path": XHTTP_PATH}
+            }
+        else:
+            stream_settings = {
+                "network": "ws",
+                "security": "tls",
+                "tlsSettings": {"certificates": [{"certificateFile": CERT_FILE, "keyFile": KEY_FILE}]},
+                "wsSettings": {"path": WS_PATH}
+            }
+
+        # 核心逻辑：decryption 字段
+        # 如果开启 PQ 且有 Key，则用 Key；否则必须是 "none"
+        decryption_value = DECRYPTION if (ENABLE_PQ and DECRYPTION) else "none"
+
+        vless_settings = {
+            "clients": [{"id": user_uuid, "flow": FLOW}],
+            "decryption": decryption_value
+        }
+
+        config = {
+            "log": {"access": "none", "error": "none", "loglevel": "none"},
+            "inbounds": [{
+                "port": PORT,
+                "listen": "0.0.0.0",
+                "protocol": "vless",
+                "settings": vless_settings,
+                "streamSettings": stream_settings
+            }],
+            "outbounds": [{"protocol": "freedom", "tag": "direct"}, {"protocol": "blackhole", "tag": "block"}]
+        }
+
+        with open(CFG, 'w') as f:
+            json.dump(config, f)
+
+        # 启动 Xray 进程
+        subprocess.Popen([BIN, '-c', CFG], start_new_session=True)
+        print(f"🚀 Xray Running on {PORT}")
+
+        print_link(SERVER_HOST, PORT, f"{LINK_NAME}-Direct", 'direct')
+
+        # --- 启动 FRP ---
+        if NEED_FRP and os.path.exists(FRPC_TAR):
+            print('📦 Unzipping FRP...')
+            with tarfile.open(FRPC_TAR, "r:gz") as tar:
+                tar.extractall(TMP)
+            
+            frp_found = find_bin(TMP, 'frpc')
+            if frp_found:
+                shutil.move(frp_found, FRPC_BIN)
+                os.chmod(FRPC_BIN, 0o755)
+                start_frp()
+
+        # --- 启动 Argo ---
+        if ENABLE_ARGO and os.path.exists(ARGO_BIN):
+            os.chmod(ARGO_BIN, 0o755)
+
+            if ARGO_TOKEN and ARGO_DOMAIN:
+                print('☁️  Starting Argo (Token)...')
+                subprocess.Popen([ARGO_BIN, 'tunnel', 'run', '--token', ARGO_TOKEN], 
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print_link(ARGO_DOMAIN, 443, f"{LINK_NAME}-Argo", 'argo')
+            else:
+                print('☁️  Starting Argo (Quick)...')
+                # 需要读取 stderr 来获取 trycloudflare 链接
+                def watch_argo_output(proc):
+                    for line in iter(proc.stderr.readline, b''):
+                        line_str = line.decode('utf-8', errors='ignore')
+                        import re
+                        m = re.search(r'(https://[a-zA-Z0-9-]+\.trycloudflare\.com)', line_str)
+                        if m:
+                            domain = m.group(1).replace('https://', '')
+                            print_link(domain, 443, f"{LINK_NAME}-Argo", 'argo')
+                
+                argo_proc = subprocess.Popen(
+                    [ARGO_BIN, 'tunnel', '--url', f'https://localhost:{PORT}', '--no-tls-verify', '--no-autoupdate'],
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.PIPE
+                )
+                threading.Thread(target=watch_argo_output, args=(argo_proc,), daemon=True).start()
+
+    except Exception as e:
+        print(f"❌ Fail: {e}")
+        sys.exit(1)
+
+    # --- 辅助功能：清理与报告 ---
+    
+    def show_details():
+        if SHOW_LINKS and SAVED_LINKS:
+            print('\n--- Saved Links ---')
+            for link in SAVED_LINKS:
+                print(link.strip())
+            print('-------------------\n')
+
+    # 30秒后清理 TMP
+    def cleanup_task():
+        time.sleep(30)
+        # 清屏 (ANSI escape)
+        print('\033c', end='')
+        if os.path.exists(TMP):
+            try:
+                shutil.rmtree(TMP, ignore_errors=True)
+                print('🧹 Cleaned up')
+            except: pass
+        show_details()
+
+    threading.Thread(target=cleanup_task, daemon=True).start()
+
+    # 主循环 (Keep Alive)
+    last_report_time = time.time()
+    
+    while True:
+        current_time = time.time()
+        
+        # 每6小时 (21600秒) 报告一次
+        if current_time - last_report_time > 21600:
+            print('\033c', end='')
+            print(f"\n🕒 Report: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            show_details()
+            last_report_time = current_time
+            
+        # 简单的 Keep Alive 打印
+        print(f'💗 Keep alive {time.strftime("%Y-%m-%d %H:%M:%S")}')
+        sys.stdout.flush()
+        time.sleep(300)
+
+if __name__ == '__main__':
+    main()
