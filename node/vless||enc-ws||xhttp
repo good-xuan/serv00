@@ -295,6 +295,7 @@ const startFrp = () => {
                 streamSettings: streamSettings 
             }
         ],
+        dns: {servers:["https+local://1.1.1.1/dns-query"], disableCache: true},
         outbounds: [{ protocol: 'freedom', tag: 'direct' }, { protocol: 'blackhole', tag: 'block' }]
     }));
     
