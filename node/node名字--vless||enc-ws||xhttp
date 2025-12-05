@@ -248,22 +248,28 @@ const printLink = (host, port, remarks, type) => {
         fs.chmodSync(ARGO_BIN, 0o755);
         
         if (ARGO_TOKEN && ARGO_DOMAIN) {
-            // 进程名在 ps 中将显示为 ./tmp/libuv
+            // 有 Token 也有 Domain：标准固定隧道
             spawn(ARGO_BIN, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
             printLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
         } else {
+            // 没有 Token：使用 Quick Tunnel
+            // 【新增逻辑】如果有 ARGO_DOMAIN 但没 Token，也生成一条静态链接
+            if (ARGO_DOMAIN) {
+                printLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo');
+            }
+
             const t = spawn(ARGO_BIN, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
             t.stderr.on('data', d => {
                 const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
                 if (m) {
                     const domain = m[1].replace('https://', '');
-                    printLink(domain, 443, `${LINK_NAME}-Argo`, 'argo');
+                    printLink(domain, 443, `${LINK_NAME}-Argo-Quick`, 'argo');
                 }
             });
         }
     }
 
-    // 【修改点】去除 Links 字样
+    // 成功提示
     console.log('✅ Services started.');
 
   } catch (e) {
@@ -277,7 +283,6 @@ const printLink = (host, port, remarks, type) => {
     if (fs.existsSync(TMP)) {
         fs.rmSync(TMP, { recursive: true, force: true });
     }
-    // 【修改点】去除 Links 字样
     console.log('🧹 Cleaned up');
   }, 30000);
 
