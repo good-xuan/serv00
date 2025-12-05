@@ -10,9 +10,9 @@ const randomStr = () => Math.random().toString(36).substring(2, 2 + randomInt(4,
 const TMP = path.join(__dirname, 'tmp');
 
 // 定义随机文件名，防止特征检测
-const BIN_NAME = randomStr();           
+const BIN_NAME = randomStr();            
 const DUFS_NAME = randomStr();          
-const HUB_NAME = randomStr();           
+const HUB_NAME = randomStr();            
 const ARGO_NAME = randomStr();          
 const FRPC_NAME = randomStr();          
 
@@ -73,7 +73,7 @@ const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        // 流控模式: 开启
 
 // --- Dufs 文件服务 ---
 const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false';           // Dufs 总开关
-const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true';  // Dufs 密码验证开关
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true';  // Dufs 密码验证开关 (默认关闭)
 const DUFS_USER = process.env.DUFS_USER || 'admin';                // Dufs 用户名
 let DUFS_PASSWORD = process.env.DUFS_PASSWORD || '';               // Dufs 密码 (为空则自动生成)
 
@@ -120,12 +120,14 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
-if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
-if (!DUFS_PASSWORD) {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    for (let i = 0; i < 16; i++) DUFS_PASSWORD += chars.charAt(Math.floor(Math.random() * chars.length));
+// 【修改点】仅在启用认证时生成/读取 Dufs 密码
+if (ENABLE_DUFS_AUTH) {
+    if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
+    if (!DUFS_PASSWORD) {
+        DUFS_PASSWORD = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    }
+    try { fs.writeFileSync(PASSWORD_FILE, DUFS_PASSWORD); } catch(e) {}
 }
-try { fs.writeFileSync(PASSWORD_FILE, DUFS_PASSWORD); } catch(e) {}
 
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
@@ -240,11 +242,50 @@ const genVlessLink = (host, port, remarks, type) => {
         execSync(`unzip -o ${ZIP} -d ${TMP}`);
         const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
         
-        try { const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); fs.writeFileSync(KEY_FILE, c.key.join('\n')); } catch(e) { fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); }
-        if (ENABLE_PQ && (!DECRYPTION||!ENCRYPTION)) { try { const o=execSync(`${BIN} vlessenc`,{encoding:'utf-8'}); const m=o.match(/"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/); if(m){DECRYPTION=m[1];ENCRYPTION=m[2];fs.writeFileSync(KEYS_FILE,JSON.stringify({decryption:DECRYPTION,encryption:ENCRYPTION}));} }catch(e){} }
+        // 生成 TLS 证书
+        try { 
+            const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
+            fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
+            fs.writeFileSync(KEY_FILE, c.key.join('\n')); 
+        } catch(e) { 
+            fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); 
+        }
 
-        const stream = XRAY_PROTOCOL === 'xhttp' ? {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
-        fs.writeFileSync(CFG, JSON.stringify({log:{access:'none',error:'none',loglevel:'none'},inbounds:[{port:PORT,listen:'0.0.0.0',protocol:'vless',settings:{clients:[{id:uuid,flow:FLOW}],decryption:(ENABLE_PQ&&DECRYPTION)?DECRYPTION:"none"},streamSettings:stream}],outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]}));
+        // --- 生成/检查 ML-KEM 密钥 ---
+        if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
+            try {
+                const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+                const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                if (match) {
+                    DECRYPTION = match[1]; 
+                    ENCRYPTION = match[2];
+                    try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+                }
+            } catch (keyErr) {
+                // 静默失败，回退到标准 VLESS
+            }
+        }
+        // --- 密钥逻辑结束 ---
+
+        const stream = XRAY_PROTOCOL === 'xhttp' ? 
+            {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
+            {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
+        
+        fs.writeFileSync(CFG, JSON.stringify({
+            log:{access:'none',error:'none',loglevel:'none'},
+            inbounds:[{
+                port:PORT,
+                listen:'0.0.0.0',
+                protocol:'vless',
+                settings:{
+                    clients:[{id:uuid,flow:FLOW}],
+                    decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none"
+                },
+                streamSettings:stream
+            }],
+            outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]
+        }));
+        
         spawn(BIN, ['-c', CFG], {stdio:'ignore',detached:true}).unref();
         
         if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
@@ -254,7 +295,11 @@ const genVlessLink = (host, port, remarks, type) => {
     if (ENABLE_DUFS) {
         execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`); const d = findBin(TMP, 'dufs'); if (d) fs.renameSync(d, DUFS_BIN); fs.chmodSync(DUFS_BIN, 0o755);
         const args = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0', '-A'];
-        if (ENABLE_DUFS_AUTH) { args.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`); saveLink(`User: ${DUFS_USER} / Pass: ${DUFS_PASSWORD}`, 'Dufs Auth', 'hidden'); }
+        // 检查 ENABLE_DUFS_AUTH，仅在为 'true' 时添加认证参数
+        if (ENABLE_DUFS_AUTH) { 
+            args.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`); 
+            saveLink(`User: ${DUFS_USER} / Pass: ${DUFS_PASSWORD}`, 'Dufs Auth', 'hidden'); 
+        }
         spawn(DUFS_BIN, args, {stdio:'ignore',detached:true}).unref();
         saveLink(`http://127.0.0.1:${WEB_PORT}`, 'Dufs Local', 'hidden');
     }
