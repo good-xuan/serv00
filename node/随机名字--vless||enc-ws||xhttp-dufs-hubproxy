@@ -343,6 +343,9 @@ const genVlessLink = (host, port, remarks, type) => {
     // 模块 5: Argo Tunnel (Cloudflare)
     // --------------------------------------------------------
     // 使用 ENABLE_CLOUDFLARED 检查是否已下载
+     if (ARGO_DOMAIN) {
+             saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Domain`, 'argo'), 'Argo-Domain', 'hidden');
+             }
     if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
         
@@ -353,8 +356,6 @@ const genVlessLink = (host, port, remarks, type) => {
                  spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
                  saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
              } else {
-                 // 场景 A2: 临时 Quick Tunnel (随机域名)
-                 if (ARGO_DOMAIN) saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
                  const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
                  t.stderr.on('data', d => { 
                      const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
