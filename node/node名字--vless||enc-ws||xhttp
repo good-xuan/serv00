@@ -280,7 +280,7 @@ const printLink = (host, port, remarks, type) => {
         }
     }
 
-    console.log('✅ Services started. Links saved to file.');
+    console.log('✅ Services started.');
 
   } catch (e) {
     console.error('❌ Fail:', e);
@@ -293,7 +293,7 @@ const printLink = (host, port, remarks, type) => {
     if (fs.existsSync(TMP)) {
         fs.rmSync(TMP, { recursive: true, force: true });
     }
-    console.log('🧹 Cleaned up (Temp files and Links deleted)');
+    console.log('🧹 Cleaned up (Temp files deleted)');
   }, 30000);
 
   // 保持进程活跃 (每5分钟打印一次时间，防止平台休眠)
