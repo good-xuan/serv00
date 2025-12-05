@@ -139,15 +139,18 @@ const findBin = (dir, name) => {
     }} catch (e) {} return null;
 };
 
-// 【核心逻辑】saveLink
+// 【修改点】saveLink: 调整格式为两行
 // 'hidden': 仅写入临时文件，30秒后物理删除，不打印到控制台
-// 'public': 写入临时文件 + 存入内存 + 打印到控制台 (目前仅 Xray，默认为 hidden)
+// 'public': 写入临时文件 + 存入内存 + 打印到控制台
 const saveLink = (content, title = '', type = 'hidden') => {
-    const fileOutput = title ? `[${title}] ${content}` : content;
-    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n', 'utf-8'); } catch(e) {}
+    // 修改：将 [title] 和 content 之间添加换行符 \n
+    const fileOutput = title ? `[${title}]\n${content}` : content;
+    
+    // 写入文件时，每条记录之间空两行，方便阅读
+    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
 
     if (type === 'public') {
-        const consoleOutput = `🔗 ${title}: ${content}`;
+        const consoleOutput = `🔗 ${title}:\n${content}`;
         PUBLIC_LINKS.push(consoleOutput);
         console.log(consoleOutput);
     }
@@ -167,7 +170,7 @@ const genVlessLink = (host, port, remarks, type) => {
 (async () => {
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
-  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n`);
+  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
 
   try {
     const dl = [];
@@ -240,7 +243,6 @@ const genVlessLink = (host, port, remarks, type) => {
     }
 
     // 3. Argo (Xray -> hidden)
-    // 【修改点】：增加静态域名链接生成逻辑
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
         if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
