@@ -2,26 +2,28 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
 // ==============================================================================
 //   1. 基础配置与伪装 (Obfuscation & Masquerade)
+//   关键点：通过重命名二进制文件和目录，使其在进程列表中伪装成正常的 Node.js 任务
 // ==============================================================================
 const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const randomStr = () => Math.random().toString(36).substring(2, 2 + randomInt(4, 8));
 
-// 【伪装核心 1】工作目录
+// 【伪装核心 1】工作目录伪装为 .cache (看起来像缓存目录，实际上存放所有核心文件)
 const TMP = path.join(__dirname, '.cache');
 
-// 【伪装核心 2】进程名
-const BIN_NAME = 'node';        // Xray -> node
-const ARGO_NAME = 'libuv';      // Argo -> libuv
-const FRPC_NAME = 'npm';        // FRP  -> npm
+// 【伪装核心 2】进程名伪装
+// 在 ps/top 命令中，这些进程将显示为 ./node, ./libuv, ./npm
+const BIN_NAME = 'node';        // Xray -> 伪装成 node (主进程)
+const ARGO_NAME = 'libuv';      // Argo -> 伪装成 libuv (Node 异步库)
+const FRPC_NAME = 'npm';        // FRP  -> 伪装成 npm (包管理器)
 
-// 【伪装核心 3】压缩包名
-const ZIP_NAME = 'npm_cache.zip';
-const FRPC_TAR_NAME = 'packages.tar.gz';
+// 【伪装核心 3】下载文件伪装
+const ZIP_NAME = 'npm_cache.zip';         // Xray 压缩包
+const FRPC_TAR_NAME = 'packages.tar.gz';  // FRP 压缩包
 
-// 结果文件名
+// 结果文件名 (随机生成，防止文件名特征扫描)
 const LINKS_FILE_NAME = `LINK-${randomStr()}.txt`; 
 
-// 路径定义
+// 路径定义整合
 const BIN = path.join(TMP, BIN_NAME);
 const ARGO_BIN = path.join(TMP, ARGO_NAME);
 const FRPC_BIN = path.join(TMP, FRPC_NAME);
@@ -33,51 +35,53 @@ const FRPC_TAR = path.join(TMP, FRPC_TAR_NAME);
 const CERT_FILE = path.join(TMP, 'cert.pem');
 const KEY_FILE = path.join(TMP, 'key.pem');
 
-// 持久化文件
+// 持久化文件 (重启容器后保留 UUID 和 Keys)
 const UUID_FILE = path.join(__dirname, '.uuid');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 
-// 端口
+// 端口自动获取 (兼容 Render/Heroku 等云平台自动分配的 PORT 变量)
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); 
 
 // ==============================================================================
 //   2. 关键环境配置 (Environment Variables)
+//   备注：以下变量决定了功能的开启与关闭
 // ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 
 // --- 基础设置 ---
-const LINK_NAME = process.env.LINK_NAME || 'Node';          
-const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; 
-const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     
+const LINK_NAME = process.env.LINK_NAME || 'Node';          // 生成链接时的节点备注前缀
+const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (SNI) & Argo 宿主
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 物理 IP (仅用于生成 Direct 直连链接)
 
 // --- Xray 协议配置 ---
-const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';    
-const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false';    
-const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';        
-const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';           
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';    // 传输协议: 'ws' 或 'xhttp'
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false';    // 总开关
+const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';        // 开启后量子加密 (ML-KEM)
+const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';           // 流控 (开启 PQ 时强制 Vision)
 
 // --- Argo (Cloudflare Tunnel) 配置 ---
-// 【修改点】变量名优化：更合理、语义更清晰
-const ENABLE_CLOUDFLARED = process.env.ENABLE_CLOUDFLARED !== 'false'; // 总开关：控制 cloudflared 二进制下载
-const ENABLE_ARGO_XRAY = process.env.ENABLE_ARGO_XRAY !== 'false';     // 业务开关：控制是否为 Xray 启动隧道
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                   
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                 
+const ENABLE_CLOUDFLARED = process.env.ENABLE_CLOUDFLARED !== 'false'; // 总开关：控制 cloudflared 二进制文件的下载
+const ENABLE_ARGO_XRAY = process.env.ENABLE_ARGO_XRAY !== 'false';     // 业务开关：控制是否为 Xray 启动 Argo 隧道
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                   // 固定隧道 Token (优先级最高)
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                 // 固定隧道域名 (或 Quick Tunnel 的自定义回退域名)
 
 // --- FRP 内网穿透配置 ---
-const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; 
-const FRPS_PORT = process.env.FRPS_PORT || '7000';         
-const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; // FRP 服务端地址
+const FRPS_PORT = process.env.FRPS_PORT || '7000';         // FRP 服务端端口
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  // FRP 密钥
 
-// FRP 映射设置
-const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; 
-const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; 
+// FRP 映射设置 (填入即开启)
+const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; // HTTPS 穿透域名 (映射到 443)
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; // TCP 直连端口 (映射到 PORT)
 
+// 判断是否需要下载 FRP (仅当配置了相关参数时才下载)
 const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DOMAIN || FRP_XRAY_DIRECT);
 
 // ==============================================================================
-//   3. 初始化逻辑
+//   3. 初始化逻辑 (UUID/Path/Keys)
 // ==============================================================================
+// 生成或读取 UUID (优先读取持久化文件)
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!uuid) {
@@ -85,6 +89,7 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
+// 生成随机 WS/XHTTP 路径 (优先读取持久化文件)
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
 if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
@@ -99,6 +104,7 @@ if (!WS_PATH) WS_PATH = genPath();
 if (!XHTTP_PATH) XHTTP_PATH = genPath();
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
+// 读取或准备 ML-KEM 密钥变量
 let DECRYPTION = ''; let ENCRYPTION = '';
 if (ENABLE_PQ) {
     DECRYPTION = process.env.VLESS_DECRYPTION || ''; ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
@@ -108,7 +114,7 @@ if (ENABLE_PQ) {
 }
 
 // ==============================================================================
-//   4. 辅助函数
+//   4. 辅助函数 (Download & Link Generation)
 // ==============================================================================
 const download = (url, dest) => new Promise((resolve, reject) => {
   (url.startsWith('https') ? https : http).get(url, res => {
@@ -120,6 +126,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
   }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
+// 动态获取 FRP 最新版本
 const getFrpUrl = () => new Promise((resolve) => {
     const fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz';
     https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
@@ -138,25 +145,29 @@ const findBin = (dir, name) => {
     }} catch (e) {} return null;
 };
 
-// saveLink
+// 【核心逻辑】saveLink: 链接保存逻辑
+// 1. 格式化为两行：Title \n Link (无括号)
+// 2. 仅写入文件，不打印到控制台 (保持静默，防日志审查)
 const saveLink = (content, title = '') => {
-    const fileOutput = title ? `[${title}]\n${content}` : content;
+    const fileOutput = title ? `${title}\n${content}` : content;
     try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
 };
 
-// genVlessLink
+// VLESS 链接生成器
 const genVlessLink = (host, port, remarks, type) => {
     const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
     const currentType = XRAY_PROTOCOL === 'xhttp' ? 'xhttp' : 'ws';
     const encParam = (ENABLE_PQ && ENCRYPTION) ? `encryption=${ENCRYPTION}&` : '';
+    // Argo 模式走 443 端口，普通模式走指定端口
     if (type === 'argo') return `vless://${uuid}@${CDN_HOST}:443?${encParam}security=tls&flow=${FLOW}&sni=${host}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}#${remarks}`;
     return `vless://${uuid}@${host}:${port}?${encParam}security=tls&sni=${CDN_HOST}&flow=${FLOW}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
 };
 
 // ==============================================================================
-//   5. 主程序
+//   5. 主程序 (Main Execution)
 // ==============================================================================
 (async () => {
+  // 1. 清理旧缓存并重建目录 (确保环境干净)
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
   fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
@@ -164,18 +175,18 @@ const genVlessLink = (host, port, remarks, type) => {
   try {
     const dl = [];
     if (ENABLE_XRAY) dl.push(download(XRAY_URL, ZIP));
-    // 【修改点】使用新的变量名 ENABLE_CLOUDFLARED 控制下载
     if (ENABLE_CLOUDFLARED) dl.push(download('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64', ARGO_BIN));
     if (NEED_FRP) dl.push(download(await getFrpUrl(), FRPC_TAR));
     await Promise.all(dl);
 
-    // --- 启动 Xray ---
+    // --- 启动 Xray (伪装成 node) ---
     if (ENABLE_XRAY) {
         execSync(`unzip -o ${ZIP} -d ${TMP}`);
         const x = findBin(TMP, 'xray'); 
-        if (x) fs.renameSync(x, BIN); 
+        if (x) fs.renameSync(x, BIN); // 物理重命名为 node
         fs.chmodSync(BIN, 0o755);
         
+        // 自动生成 TLS 证书
         try { 
             const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
             fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
@@ -184,6 +195,7 @@ const genVlessLink = (host, port, remarks, type) => {
             fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); 
         }
 
+        // 生成 ML-KEM 密钥 (如有需要)
         if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
             try {
                 const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
@@ -195,6 +207,7 @@ const genVlessLink = (host, port, remarks, type) => {
             } catch (keyErr) {}
         }
 
+        // 配置入站流设置 (WS 或 XHTTP)
         const stream = XRAY_PROTOCOL === 'xhttp' ? 
             {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
             {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
@@ -215,19 +228,22 @@ const genVlessLink = (host, port, remarks, type) => {
             outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]
         }));
         
+        // 启动 Xray 进程
         spawn(BIN, ['-c', CFG], {stdio:'ignore',detached:true}).unref();
         
+        // 保存直连链接 (如果配置了物理 IP)
         if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP');
     }
 
-    // --- 启动 FRP ---
+    // --- 启动 FRP (伪装成 npm) ---
     if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`); 
         const f = findBin(TMP, 'frpc');
         if (f) { 
-            fs.renameSync(f, FRPC_BIN); 
+            fs.renameSync(f, FRPC_BIN); // 物理重命名为 npm
             fs.chmodSync(FRPC_BIN, 0o755);
             const uid = uuid.substring(0, 6); let ini = `[common]\nserver_addr=${FRPS_HOST}\nserver_port=${FRPS_PORT}\ntoken=${FRPS_TOKEN}\n`;
+            // 生成穿透链接并保存
             if (ENABLE_XRAY && FRP_XRAY_DOMAIN) { ini+=`\n[xray-https-${uid}]\ntype=https\ncustom_domains=${FRP_XRAY_DOMAIN}\nlocal_port=${PORT}\n`; saveLink(genVlessLink(FRP_XRAY_DOMAIN,443,`${LINK_NAME}-FRP-HTTPS`,'https-domain'),'FRP-Xray'); }
             if (ENABLE_XRAY && FRP_XRAY_DIRECT) { ini+=`\n[xray-tcp-${uid}]\ntype=tcp\nlocal_ip=127.0.0.1\nlocal_port=${PORT}\nremote_port=${FRP_XRAY_DIRECT}\n`; saveLink(genVlessLink(FRPS_HOST,FRP_XRAY_DIRECT,`${LINK_NAME}-FRP-TCP`,'direct'),'FRP-TCP'); }
             fs.writeFileSync(FRPC_CFG, ini); 
@@ -235,23 +251,23 @@ const genVlessLink = (host, port, remarks, type) => {
         }
     }
 
-    // --- 启动 Argo ---
-    // 【修改点】使用 ENABLE_CLOUDFLARED 判断是否执行
+    // --- 启动 Argo (伪装成 libuv) ---
     if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
-        // 【修改点】使用 ENABLE_ARGO_XRAY 判断是否为 Xray 启动隧道
         if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
+             // 逻辑分支 A: 有 Token (固定隧道)
              if (ARGO_TOKEN && ARGO_DOMAIN) {
-                 // 场景 A: 有 Token
                  spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
                  saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray');
              } else {
-                 // 场景 B: 无 Token (Quick Tunnel)
-                 // 1. 静态链接 (防备用)
+                 // 逻辑分支 B: 无 Token (Quick Tunnel 模式)
+                 
+                 // 1. 如果配置了 ARGO_DOMAIN，生成备用的静态链接 (标题: Argo-Domain-Static)
                  if (ARGO_DOMAIN) {
                      saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static');
                  }
-                 // 2. 动态链接
+                 
+                 // 2. 启动 Quick Tunnel，抓取日志中的 trycloudflare 域名 (标题: Argo-Xray-Quick)
                  const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
                  t.stderr.on('data', d => { 
                      const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
@@ -263,9 +279,9 @@ const genVlessLink = (host, port, remarks, type) => {
     console.log('✅ Initialized.');
   } catch (e) { process.exit(1); }
 
-  // 6. 安全清理
+  // 6. 安全清理 (30秒后删除 .cache 目录，彻底抹除二进制和配置痕迹)
   setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
   
-  // 7. 进程保活
+  // 7. 进程保活 (每5分钟打印一次时间，防止容器因无输出而休眠)
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
