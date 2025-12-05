@@ -10,9 +10,9 @@ const randomStr = () => Math.random().toString(36).substring(2, 2 + randomInt(4,
 const TMP = path.join(__dirname, 'tmp');
 
 // 定义随机文件名，防止特征检测
-const BIN_NAME = randomStr();            
-const ARGO_NAME = randomStr();          
-const FRPC_NAME = randomStr();          
+const BIN_NAME = randomStr();             
+const ARGO_NAME = randomStr();           
+const FRPC_NAME = randomStr();           
 
 const ZIP_NAME = randomStr() + '.zip';  
 const FRPC_TAR_NAME = randomStr() + '.tar.gz';
@@ -37,7 +37,7 @@ const UUID_FILE = path.join(__dirname, '.uuid');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 
-// 内存存储：虽然移除了 Dufs/Hub，保留结构以防后续扩展
+// 内存存储
 const PUBLIC_LINKS = [];
 
 // 端口配置
@@ -49,7 +49,7 @@ const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // �
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 
 // --- 基础设置 ---
-const LINK_NAME = process.env.LINK_NAME || 'Node';       // 节点备注名称前缀
+const LINK_NAME = process.env.LINK_NAME || 'Node';        // 节点备注名称前缀
 const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (用于 SNI 和 Argo 宿主)
 const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 服务器物理 IP (可选，用于生成直连链接)
 
@@ -240,13 +240,27 @@ const genVlessLink = (host, port, remarks, type) => {
     }
 
     // 3. Argo (Xray -> hidden)
+    // 【修改点】：增加静态域名链接生成逻辑
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
         if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
              const args = (ARGO_TOKEN && ARGO_DOMAIN) ? ['tunnel','run','--token',ARGO_TOKEN] : ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'];
+             
+             // 如果没 Token 但有 Domain，生成静态链接
+             if (!ARGO_TOKEN && ARGO_DOMAIN) {
+                 saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
+             }
+
              const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe']});
-             if (ARGO_TOKEN && ARGO_DOMAIN) saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
-             else t.stderr.on('data', d => { const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden'); });
+             
+             if (ARGO_TOKEN && ARGO_DOMAIN) {
+                 saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
+             } else {
+                 t.stderr.on('data', d => { 
+                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
+                     if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden'); 
+                 });
+             }
         }
     }
     console.log('✅ Initialized.');
