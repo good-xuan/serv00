@@ -66,7 +66,7 @@ const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';
 // [关键优化] 内存控制 (Memory Optimization)
 // 作用：PaaS 平台内存通常较小 (512MB)。
 // 设置 GOGC=20 让 Go 语言更激进地回收内存 (用 CPU 换内存)，防止进程因 OOM 被杀。
-const GO_GC_VAR = process.env.GOGC || '20'; 
+const GO_GC_VAR = process.env.GOGC || '100'; 
 
 // --- HubProxy 配置 (Docker 镜像加速) ---
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; 
