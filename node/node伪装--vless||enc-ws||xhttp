@@ -265,10 +265,7 @@ const genVlessLink = (host, port, remarks, type) => {
              } else {
                  // 逻辑分支 B: 无 Token (Quick Tunnel 模式)
                  
-                 // 1. 如果配置了 ARGO_DOMAIN，生成备用的静态链接 (标题: Argo-Domain-Static)
-                 if (ARGO_DOMAIN) {
-                     saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static');
-                 }
+
                  
                  // 2. 启动 Quick Tunnel，抓取日志中的 trycloudflare 域名 (标题: Argo-Xray-Quick)
                  const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
