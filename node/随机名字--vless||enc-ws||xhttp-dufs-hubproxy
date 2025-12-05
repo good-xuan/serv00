@@ -61,7 +61,7 @@ const HUB_PORT = PORT + 2; // HubProxy 服务内部端口
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 
 // --- 基础设置 ---
-const LINK_NAME = process.env.LINK_NAME || 'Node';       // 节点备注名称前缀
+const LINK_NAME = process.env.LINK_NAME || 'Node';        // 节点备注名称前缀
 const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (用于 SNI 和 Argo 宿主)
 const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 服务器物理 IP (可选，用于生成直连链接)
 
@@ -120,7 +120,6 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
-// 【修改点】仅在启用认证时生成/读取 Dufs 密码
 if (ENABLE_DUFS_AUTH) {
     if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
     if (!DUFS_PASSWORD) {
@@ -198,17 +197,20 @@ const findBin = (dir, name) => {
     }} catch (e) {} return null;
 };
 
-// 【核心逻辑】saveLink
-// 'hidden': 仅写入临时文件，30秒后物理删除，不打印到控制台 (保护 Xray/FRP/密码)
-// 'public': 写入临时文件 + 存入内存 + 打印到控制台 (用于展示 Dufs/Hub 的 Argo 链接)
+// 【修改点】saveLink: 改为两行显示
+// 'hidden': 仅写入临时文件，30秒后物理删除，不打印到控制台
+// 'public': 写入临时文件 + 存入内存 + 打印到控制台
 const saveLink = (content, title = '', type = 'hidden') => {
-    const fileOutput = title ? `[${title}] ${content}` : content;
-    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n', 'utf-8'); } catch(e) {}
+    // 改变格式：标题和内容之间加入换行符
+    const fileOutput = title ? `[${title}]\n${content}` : content;
+    
+    // 写入文件时，每条之间增加额外的换行以便区分
+    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
 
     if (type === 'public') {
-        const consoleOutput = `🔗 ${title}: ${content}`;
+        const consoleOutput = `🔗 ${title}:\n${content}`;
         PUBLIC_LINKS.push(consoleOutput);
-        console.log(consoleOutput); // 发现时立即打印
+        console.log(consoleOutput);
     }
 };
 
@@ -226,7 +228,7 @@ const genVlessLink = (host, port, remarks, type) => {
 (async () => {
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
-  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n`);
+  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
 
   try {
     const dl = [];
@@ -261,11 +263,8 @@ const genVlessLink = (host, port, remarks, type) => {
                     ENCRYPTION = match[2];
                     try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
                 }
-            } catch (keyErr) {
-                // 静默失败，回退到标准 VLESS
-            }
+            } catch (keyErr) {}
         }
-        // --- 密钥逻辑结束 ---
 
         const stream = XRAY_PROTOCOL === 'xhttp' ? 
             {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
@@ -296,7 +295,6 @@ const genVlessLink = (host, port, remarks, type) => {
     if (ENABLE_DUFS) {
         execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`); const d = findBin(TMP, 'dufs'); if (d) fs.renameSync(d, DUFS_BIN); fs.chmodSync(DUFS_BIN, 0o755);
         const args = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0', '-A'];
-        // 检查 ENABLE_DUFS_AUTH，仅在为 'true' 时添加认证参数
         if (ENABLE_DUFS_AUTH) { 
             args.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`); 
             saveLink(`User: ${DUFS_USER} / Pass: ${DUFS_PASSWORD}`, 'Dufs Auth', 'hidden'); 
@@ -333,11 +331,27 @@ const genVlessLink = (host, port, remarks, type) => {
     if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
         if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
-             const args = (ARGO_TOKEN && ARGO_DOMAIN) ? ['tunnel','run','--token',ARGO_TOKEN] : ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'];
-             const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe']});
-             if (ARGO_TOKEN && ARGO_DOMAIN) saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
-             else t.stderr.on('data', d => { const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden'); });
+             // 【修改点】拆分逻辑：Token优先；无Token但有Domain时生成双链接
+             if (ARGO_TOKEN && ARGO_DOMAIN) {
+                 // 1. 有 Token 的固定隧道
+                 spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
+                 saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
+             } else {
+                 // 2. 无 Token 的临时隧道 (Quick Tunnel)
+                 // (a) 如果有 Domain，先生成静态链接
+                 if (ARGO_DOMAIN) {
+                     saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
+                 }
+                 
+                 // (b) 启动 Quick Tunnel 并抓取动态链接
+                 const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
+                 t.stderr.on('data', d => { 
+                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
+                     if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo-Quick`,'argo'),'Argo-Xray-Quick','hidden'); 
+                 });
+             }
         }
+        
         // Dufs Argo -> PUBLIC
         if (ENABLE_DUFS && ENABLE_DUFS_ARGO) {
             const args = (DUFS_ARGO_TOKEN && DUFS_ARGO_DOMAIN) ? ['tunnel','run','--token',DUFS_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${WEB_PORT}`,'--no-autoupdate'];
@@ -345,6 +359,7 @@ const genVlessLink = (host, port, remarks, type) => {
             if (DUFS_ARGO_TOKEN && DUFS_ARGO_DOMAIN) saveLink(`https://${DUFS_ARGO_DOMAIN}`, 'Dufs Argo', 'public');
             else t.stderr.on('data', d => { const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); if (m) saveLink(m[1], 'Dufs Argo', 'public'); });
         }
+        
         // Hub Argo -> PUBLIC
         if (ENABLE_HUB && ENABLE_HUB_ARGO) {
             const args = (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) ? ['tunnel','run','--token',HUB_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${HUB_PORT}`,'--no-autoupdate'];
