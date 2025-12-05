@@ -1,118 +1,119 @@
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
 
 // ==============================================================================
-//   1. 基础配置与完全随机化 (Randomization)
+//   1. 基础配置与防特征检测 (Obfuscation)
 // ==============================================================================
-// 随机生成 4-8 位长度的字符串，用于混淆文件名
-const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-const randomStr = () => Math.random().toString(36).substring(2, 2 + randomInt(4, 8));
-
 const TMP = path.join(__dirname, 'tmp');
 
-// 定义随机文件名，防止特征检测
-const BIN_NAME = randomStr();            
-const DUFS_NAME = randomStr();          
-const HUB_NAME = randomStr();            
-const ARGO_NAME = randomStr();          
-const FRPC_NAME = randomStr();          
+// 随机生成 4-8 位字符串
+// 作用：混淆下载的文件名和压缩包名，防止云平台通过文件名扫描进行特征检测
+const randomStr = () => Math.random().toString(36).substring(2, 6 + Math.floor(Math.random() * 5));
+
+// 定义随机文件名 (Binaries & Archives)
+const BIN_NAME = randomStr();             
+const DUFS_NAME = randomStr();           
+const HUB_NAME = randomStr();             
+const ARGO_NAME = randomStr();           
+const FRPC_NAME = randomStr();           
 
 const ZIP_NAME = randomStr() + '.zip';  
 const DUFS_TAR_NAME = randomStr() + '.tar.gz';
 const HUB_TAR_NAME = randomStr() + '.tar.gz';
 const FRPC_TAR_NAME = randomStr() + '.tar.gz';
+const LINKS_FILE_NAME = `LINK-${randomStr()}.txt`; // 最终链接保存的文件名
 
-// 结果文件带 LINK- 前缀
-const LINKS_FILE_NAME = `LINK-${randomStr()}.txt`; 
-
-// 路径定义
+// 构造完整的文件路径
 const BIN = path.join(TMP, BIN_NAME);
 const DUFS_BIN = path.join(TMP, DUFS_NAME);
 const HUB_BIN = path.join(TMP, HUB_NAME);
 const ARGO_BIN = path.join(TMP, ARGO_NAME);
 const FRPC_BIN = path.join(TMP, FRPC_NAME);
 const LINKS_PATH = path.join(TMP, LINKS_FILE_NAME);
-const CFG = path.join(TMP, 'config.json');
-const FRPC_CFG = path.join(TMP, 'frpc.ini');
+const CFG = path.join(TMP, 'config.json');      // Xray 配置文件
+const FRPC_CFG = path.join(TMP, 'frpc.ini');    // FRP 配置文件
 const ZIP = path.join(TMP, ZIP_NAME);
 const DUFS_TAR = path.join(TMP, DUFS_TAR_NAME);
 const HUB_TAR = path.join(TMP, HUB_TAR_NAME);
 const FRPC_TAR = path.join(TMP, FRPC_TAR_NAME);
-const CERT_FILE = path.join(TMP, 'cert.pem');
-const KEY_FILE = path.join(TMP, 'key.pem');
+const CERT_FILE = path.join(TMP, 'cert.pem');   // 自签 TLS 证书
+const KEY_FILE = path.join(TMP, 'key.pem');     // 自签 TLS 私钥
 
-// 持久化文件 (重启后保留 UUID 等信息)
+// 持久化文件路径 (用于在容器重启后保持 UUID、密码等信息不变)
 const UUID_FILE = path.join(__dirname, '.uuid');
 const PASSWORD_FILE = path.join(__dirname, '.password');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
-const SHARE_PATH = path.join(__dirname, 'share');
+const SHARE_PATH = path.join(__dirname, 'share'); // Dufs 默认共享目录
 
-// 内存存储：仅存储 Dufs/Hub 的 Argo 链接用于公开展示
+// 内存存储：用于存放公开的链接 (如 Dufs/Hub 的 Argo 链接)，以便定时输出到控制台
 const PUBLIC_LINKS = [];
 
-// 端口配置
-const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // 主端口 (Render/Heroku 等平台会自动分配)
+// 端口分配
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // 主端口 (PaaS 平台分配)
 const WEB_PORT = PORT + 1; // Dufs 文件服务内部端口
 const HUB_PORT = PORT + 2; // HubProxy 服务内部端口
 
 // ==============================================================================
-//   2. 环境配置 (Environment Configuration) - 关键备注区域
+//   2. 环境配置与开关 (Environment Variables) - 核心控制区
 // ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 
-// --- 基础设置 ---
-const LINK_NAME = process.env.LINK_NAME || 'Node';        // 节点备注名称前缀
+const LINK_NAME = process.env.LINK_NAME || 'Node';        // 生成链接时的备注前缀
 const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (用于 SNI 和 Argo 宿主)
-const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 服务器物理 IP (可选，用于生成直连链接)
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 如果你知道服务器真实IP，填入可生成直连链接
 
-// --- Xray 核心协议 ---
-const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 传输协议: 'ws' (WebSocket) 或 'xhttp' (HTTP/2)
-const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 总开关: true/false
-const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     // 后量子加密 (ML-KEM) 开关: true/false
-const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        // 流控模式: 开启 PQ 时强制使用 Vision
+// --- Xray 配置 ---
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 传输协议: 'ws' 或 'xhttp'
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 总开关
+const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     // 是否开启抗量子加密 (ML-KEM)
+const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        // 开启 PQ 时必须使用 Vision 流控
 
-// --- Dufs 文件服务 ---
+// --- Dufs 文件服务器配置 ---
 const ENABLE_DUFS = process.env.ENABLE_DUFS !== 'false';           // Dufs 总开关
-const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true';  // Dufs 密码验证开关 (默认关闭)
+const ENABLE_DUFS_AUTH = process.env.ENABLE_DUFS_AUTH === 'true';  // 是否开启 Dufs 密码访问
 const DUFS_USER = process.env.DUFS_USER || 'admin';                // Dufs 用户名
-let DUFS_PASSWORD = process.env.DUFS_PASSWORD || '';               // Dufs 密码 (为空则自动生成)
+let DUFS_PASSWORD = process.env.DUFS_PASSWORD || '';               // Dufs 密码
 
-// --- HubProxy 镜像加速 ---
+// --- HubProxy 容器镜像加速配置 ---
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; // HubProxy 总开关
 
 // --- Argo (Cloudflare Tunnel) 配置 ---
-const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';           // Argo 总开关
-// 1. Xray 的 Argo
-const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false'; // 是否为 Xray 启用 Argo
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                   // 固定 Token (为空则使用临时 Quick Tunnel)
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                 // 固定域名 (配合 Token 使用)
-// 2. Dufs 的 Argo
-const ENABLE_DUFS_ARGO = process.env.ENABLE_DUFS_ARGO !== 'false'; // 是否为 Dufs 启用 Argo
-const DUFS_ARGO_TOKEN = process.env.DUFS_ARGO_TOKEN || '';         // Dufs 固定 Token
-const DUFS_ARGO_DOMAIN = process.env.DUFS_ARGO_DOMAIN || '';       // Dufs 固定域名
-// 3. HubProxy 的 Argo
-const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';   // 是否为 HubProxy 启用 Argo
-const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';           // Hub 固定 Token
-const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';         // Hub 固定域名
+// 1. 程序开关
+const ENABLE_CLOUDFLARED = process.env.ENABLE_CLOUDFLARED !== 'false'; // 总开关：是否下载/运行 cloudflared
+// 2. 业务开关 (Xray)
+const ENABLE_ARGO_XRAY = process.env.ENABLE_ARGO_XRAY !== 'false';     // 是否把 Xray 代理通过 Argo 暴露
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                       // Xray 用的固定 Tunnel Token
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                     // Xray 用的固定域名
+// 3. 业务开关 (Dufs)
+const ENABLE_DUFS_ARGO = process.env.ENABLE_DUFS_ARGO !== 'false'; 
+const DUFS_ARGO_TOKEN = process.env.DUFS_ARGO_TOKEN || '';         
+const DUFS_ARGO_DOMAIN = process.env.DUFS_ARGO_DOMAIN || '';       
+// 4. 业务开关 (HubProxy)
+const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';   
+const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';           
+const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';         
 
 // --- FRP 内网穿透配置 ---
-const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; // FRP 服务端地址
-const FRPS_PORT = process.env.FRPS_PORT || '7000';         // FRP 服务端端口
-const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  // FRP 认证 Token
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; // FRP 服务器地址
+const FRPS_PORT = process.env.FRPS_PORT || '7000';         // FRP 服务器端口
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  // FRP 密钥
 
-// FRP 隧道域名/端口映射 (填入即开启对应功能)
-const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; // Xray HTTPS 穿透域名
-const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; // Xray TCP 直连远程端口
-const FRP_DUFS_DOMAIN = process.env.FRP_DUFS_DOMAIN || ''; // Dufs HTTP 穿透域名
-const FRP_HUB_DOMAIN  = process.env.FRP_HUB_DOMAIN || '';  // HubProxy HTTP 穿透域名
+// 填入以下变量即代表开启对应的 FRP 穿透功能
+const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; // 穿透 Xray (HTTPS)
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; // 穿透 Xray (TCP 直连)
+const FRP_DUFS_DOMAIN = process.env.FRP_DUFS_DOMAIN || ''; // 穿透 Dufs (HTTP)
+const FRP_HUB_DOMAIN  = process.env.FRP_HUB_DOMAIN || '';  // 穿透 HubProxy (HTTP)
 
+// 判断是否需要下载并运行 FRP
 const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DOMAIN || FRP_XRAY_DIRECT || FRP_DUFS_DOMAIN || FRP_HUB_DOMAIN);
 
 // ==============================================================================
-//   3. 初始化 (UUID/密码/路径生成)
+//   3. 初始化逻辑 (读取持久化配置)
 // ==============================================================================
+// 创建共享目录
 if (!fs.existsSync(SHARE_PATH)) { try { fs.mkdirSync(SHARE_PATH); } catch(e) {} }
 
+// 读取或生成 UUID (VLESS 用户 ID)
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
 if (!uuid) {
@@ -120,14 +121,14 @@ if (!uuid) {
 }
 try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
 
+// 读取或生成 Dufs 密码
 if (ENABLE_DUFS_AUTH) {
     if (!DUFS_PASSWORD && fs.existsSync(PASSWORD_FILE)) { try { DUFS_PASSWORD = fs.readFileSync(PASSWORD_FILE, 'utf-8').trim(); } catch(e) {} }
-    if (!DUFS_PASSWORD) {
-        DUFS_PASSWORD = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    }
+    if (!DUFS_PASSWORD) DUFS_PASSWORD = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     try { fs.writeFileSync(PASSWORD_FILE, DUFS_PASSWORD); } catch(e) {}
 }
 
+// 读取或生成 WS/XHTTP 路径 (Path)
 let WS_PATH = process.env.WS_PATH || '';
 let XHTTP_PATH = process.env.XHTTP_PATH || '';
 if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
@@ -137,11 +138,11 @@ if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
         if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
     } catch(e) {}
 }
-const genPath = () => '/' + Math.random().toString(36).substring(2, 8);
-if (!WS_PATH) WS_PATH = genPath();
-if (!XHTTP_PATH) XHTTP_PATH = genPath();
+if (!WS_PATH) WS_PATH = '/' + Math.random().toString(36).substring(2, 8);
+if (!XHTTP_PATH) XHTTP_PATH = '/' + Math.random().toString(36).substring(2, 8);
 try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
 
+// 读取或生成 ML-KEM 密钥对 (用于抗量子加密)
 let DECRYPTION = ''; let ENCRYPTION = '';
 if (ENABLE_PQ) {
     DECRYPTION = process.env.VLESS_DECRYPTION || ''; ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
@@ -151,8 +152,9 @@ if (ENABLE_PQ) {
 }
 
 // ==============================================================================
-//   4. 辅助函数
+//   4. 辅助工具函数
 // ==============================================================================
+// 通用下载函数 (处理重定向)
 const download = (url, dest) => new Promise((resolve, reject) => {
   (url.startsWith('https') ? https : http).get(url, res => {
     if (res.statusCode === 301 || res.statusCode === 302) return download(res.headers.location, dest).then(resolve).catch(reject);
@@ -163,6 +165,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
   }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
+// 获取 FRP 最新版本下载链接
 const getFrpUrl = () => new Promise((resolve) => {
     const fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz';
     https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
@@ -174,6 +177,7 @@ const getFrpUrl = () => new Promise((resolve) => {
     }).on('error', () => resolve(fallback));
 });
 
+// 获取 Dufs 最新版本
 const getDufsLatestUrl = () => new Promise((resolve) => {
     const fallback = 'https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz';
     https.get('https://github.com/sigoden/dufs/releases/latest', (res) => {
@@ -182,6 +186,7 @@ const getDufsLatestUrl = () => new Promise((resolve) => {
     }).on('error', () => resolve(fallback));
 });
 
+// 获取 HubProxy 最新版本
 const getHubProxyUrl = () => new Promise((resolve) => {
     const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
     https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
@@ -190,6 +195,7 @@ const getHubProxyUrl = () => new Promise((resolve) => {
     }).on('error', () => resolve(fallback));
 });
 
+// 递归查找二进制文件
 const findBin = (dir, name) => {
     try { const files = fs.readdirSync(dir, { withFileTypes: true }); for (const f of files) { const fullPath = path.join(dir, f.name);
             if (f.isDirectory()) { const res = findBin(fullPath, name); if (res) return res; } 
@@ -197,16 +203,13 @@ const findBin = (dir, name) => {
     }} catch (e) {} return null;
 };
 
-// 【修改点】saveLink: 改为两行显示
-// 'hidden': 仅写入临时文件，30秒后物理删除，不打印到控制台
-// 'public': 写入临时文件 + 存入内存 + 打印到控制台
+// 保存链接到文件并打印
+// type='hidden': 只写文件，不打印 (用于敏感的 Xray 链接)
+// type='public': 写文件 + 存内存 + 打印 (用于公开的 Dufs/Hub 链接)
 const saveLink = (content, title = '', type = 'hidden') => {
-    // 改变格式：标题和内容之间加入换行符
-    const fileOutput = title ? `[${title}]\n${content}` : content;
-    
-    // 写入文件时，每条之间增加额外的换行以便区分
+    // 格式化输出：去除标题方括号
+    const fileOutput = title ? `${title}\n${content}` : content;
     try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
-
     if (type === 'public') {
         const consoleOutput = `🔗 ${title}:\n${content}`;
         PUBLIC_LINKS.push(consoleOutput);
@@ -214,87 +217,92 @@ const saveLink = (content, title = '', type = 'hidden') => {
     }
 };
 
+// 生成 VLESS 链接 (支持 Argo 格式和标准格式)
 const genVlessLink = (host, port, remarks, type) => {
     const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
     const currentType = XRAY_PROTOCOL === 'xhttp' ? 'xhttp' : 'ws';
     const encParam = (ENABLE_PQ && ENCRYPTION) ? `encryption=${ENCRYPTION}&` : '';
+    // Argo 链接使用端口 443 + TLS
     if (type === 'argo') return `vless://${uuid}@${CDN_HOST}:443?${encParam}security=tls&flow=${FLOW}&sni=${host}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}#${remarks}`;
+    // 直连/FRP 链接使用指定端口
     return `vless://${uuid}@${host}:${port}?${encParam}security=tls&sni=${CDN_HOST}&flow=${FLOW}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
 };
 
 // ==============================================================================
-//   5. 主程序
+//   5. 主程序流程
 // ==============================================================================
 (async () => {
+  // 1. 清理并重建临时目录
   if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
   fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
 
   try {
+    // 2. 并行下载所有开启的组件
     const dl = [];
     if (ENABLE_XRAY) dl.push(download(XRAY_URL, ZIP));
     if (ENABLE_DUFS) dl.push(download(await getDufsLatestUrl(), DUFS_TAR));
     if (ENABLE_HUB) dl.push(download(await getHubProxyUrl(), HUB_TAR));
-    if (ENABLE_ARGO) dl.push(download('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64', ARGO_BIN));
+    // 使用 ENABLE_CLOUDFLARED 控制是否下载 Argo 核心
+    if (ENABLE_CLOUDFLARED) dl.push(download('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64', ARGO_BIN));
     if (NEED_FRP) dl.push(download(await getFrpUrl(), FRPC_TAR));
     await Promise.all(dl);
 
-    // 1. Xray (Links -> hidden)
+    // --------------------------------------------------------
+    // 模块 1: Xray 核心逻辑
+    // --------------------------------------------------------
     if (ENABLE_XRAY) {
-        execSync(`unzip -o ${ZIP} -d ${TMP}`);
+        execSync(`unzip -o ${ZIP} -d ${TMP}`); // 解压
         const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
         
-        // 生成 TLS 证书
+        // 生成自签证书 (用于 VLESS TLS)
         try { 
             const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
             fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
             fs.writeFileSync(KEY_FILE, c.key.join('\n')); 
-        } catch(e) { 
-            fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); 
-        }
+        } catch(e) { fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); }
 
-        // --- 生成/检查 ML-KEM 密钥 ---
+        // 生成或读取 ML-KEM 密钥
         if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
             try {
                 const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
                 const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
                 if (match) {
-                    DECRYPTION = match[1]; 
-                    ENCRYPTION = match[2];
+                    DECRYPTION = match[1]; ENCRYPTION = match[2];
                     try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
                 }
             } catch (keyErr) {}
         }
 
+        // 配置流设置 (WS 或 XHTTP)
         const stream = XRAY_PROTOCOL === 'xhttp' ? 
             {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
             {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
         
+        // 写入 config.json
         fs.writeFileSync(CFG, JSON.stringify({
             log:{access:'none',error:'none',loglevel:'none'},
             inbounds:[{
-                port:PORT,
-                listen:'0.0.0.0',
-                protocol:'vless',
-                settings:{
-                    clients:[{id:uuid,flow:FLOW}],
-                    decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none"
-                },
+                port:PORT, listen:'0.0.0.0', protocol:'vless',
+                settings:{ clients:[{id:uuid,flow:FLOW}], decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none" },
                 streamSettings:stream
             }],
             dns: {servers:["https+local://1.1.1.1/dns-query"], disableCache: true},
             outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]
         }));
         
+        // 启动 Xray
         spawn(BIN, ['-c', CFG], {stdio:'ignore',detached:true}).unref();
-        
         if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
     }
 
-    // 2. Dufs (Local -> hidden)
+    // --------------------------------------------------------
+    // 模块 2: Dufs 文件服务
+    // --------------------------------------------------------
     if (ENABLE_DUFS) {
         execSync(`tar -xzf ${DUFS_TAR} -C ${TMP}`); const d = findBin(TMP, 'dufs'); if (d) fs.renameSync(d, DUFS_BIN); fs.chmodSync(DUFS_BIN, 0o755);
         const args = [SHARE_PATH, '-p', String(WEB_PORT), '--bind', '0.0.0.0', '-A'];
+        // 如果开启鉴权，添加用户名密码参数
         if (ENABLE_DUFS_AUTH) { 
             args.push('-a', `${DUFS_USER}:${DUFS_PASSWORD}@/:rw`); 
             saveLink(`User: ${DUFS_USER} / Pass: ${DUFS_PASSWORD}`, 'Dufs Auth', 'hidden'); 
@@ -303,22 +311,26 @@ const genVlessLink = (host, port, remarks, type) => {
         saveLink(`http://127.0.0.1:${WEB_PORT}`, 'Dufs Local', 'hidden');
     }
 
-    // 3. HubProxy (Local -> hidden)
+    // --------------------------------------------------------
+    // 模块 3: HubProxy 镜像服务
+    // --------------------------------------------------------
     if (ENABLE_HUB) {
         execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`); const h = findBin(TMP, 'hubproxy'); if (h) fs.renameSync(h, HUB_BIN); fs.chmodSync(HUB_BIN, 0o755);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
-            stdio: 'ignore', 
-            detached: true, 
+            stdio: 'ignore', detached: true, 
             env: { ...process.env, PORT: String(HUB_PORT), SERVER_PORT: String(HUB_PORT) }
         }).unref();
         saveLink(`http://127.0.0.1:${HUB_PORT}`, 'HubProxy Local', 'hidden');
     }
 
-    // 4. FRP (Links -> hidden)
+    // --------------------------------------------------------
+    // 模块 4: FRP 内网穿透
+    // --------------------------------------------------------
     if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
         execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`); const f = findBin(TMP, 'frpc');
         if (f) { fs.renameSync(f, FRPC_BIN); fs.chmodSync(FRPC_BIN, 0o755);
             const uid = uuid.substring(0, 6); let ini = `[common]\nserver_addr=${FRPS_HOST}\nserver_port=${FRPS_PORT}\ntoken=${FRPS_TOKEN}\n`;
+            // 根据环境变量动态生成 frpc.ini
             if (ENABLE_XRAY && FRP_XRAY_DOMAIN) { ini+=`\n[xray-https-${uid}]\ntype=https\ncustom_domains=${FRP_XRAY_DOMAIN}\nlocal_port=${PORT}\n`; saveLink(genVlessLink(FRP_XRAY_DOMAIN,443,`${LINK_NAME}-FRP-HTTPS`,'https-domain'),'FRP-Xray','hidden'); }
             if (ENABLE_XRAY && FRP_XRAY_DIRECT) { ini+=`\n[xray-tcp-${uid}]\ntype=tcp\nlocal_ip=127.0.0.1\nlocal_port=${PORT}\nremote_port=${FRP_XRAY_DIRECT}\n`; saveLink(genVlessLink(FRPS_HOST,FRP_XRAY_DIRECT,`${LINK_NAME}-FRP-TCP`,'direct'),'FRP-TCP','hidden'); }
             if (ENABLE_DUFS && FRP_DUFS_DOMAIN) { ini+=`\n[dufs-${uid}]\ntype=http\ncustom_domains=${FRP_DUFS_DOMAIN}\nlocal_port=${WEB_PORT}\n`; saveLink(`http://${FRP_DUFS_DOMAIN}`,'FRP-Dufs','hidden'); }
@@ -327,23 +339,22 @@ const genVlessLink = (host, port, remarks, type) => {
         }
     }
 
-    // 5. Argo (Xray -> hidden, Dufs/Hub -> PUBLIC)
-    if (ENABLE_ARGO && fs.existsSync(ARGO_BIN)) {
+    // --------------------------------------------------------
+    // 模块 5: Argo Tunnel (Cloudflare)
+    // --------------------------------------------------------
+    // 使用 ENABLE_CLOUDFLARED 检查是否已下载
+    if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
         fs.chmodSync(ARGO_BIN, 0o755);
-        if (ENABLE_XRAY && ENABLE_MAIN_ARGO) {
-             // 【修改点】拆分逻辑：Token优先；无Token但有Domain时生成双链接
+        
+        // (A) Xray 隧道：使用 ENABLE_ARGO_XRAY 控制
+        if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
              if (ARGO_TOKEN && ARGO_DOMAIN) {
-                 // 1. 有 Token 的固定隧道
+                 // 场景 A1: 固定 Token (推荐)
                  spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
                  saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray','hidden');
              } else {
-                 // 2. 无 Token 的临时隧道 (Quick Tunnel)
-                 // (a) 如果有 Domain，先生成静态链接
-                 if (ARGO_DOMAIN) {
-                     saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
-                 }
-                 
-                 // (b) 启动 Quick Tunnel 并抓取动态链接
+                 // 场景 A2: 临时 Quick Tunnel (随机域名)
+                 if (ARGO_DOMAIN) saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
                  const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
                  t.stderr.on('data', d => { 
                      const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
@@ -352,7 +363,7 @@ const genVlessLink = (host, port, remarks, type) => {
              }
         }
         
-        // Dufs Argo -> PUBLIC
+        // (B) Dufs 隧道
         if (ENABLE_DUFS && ENABLE_DUFS_ARGO) {
             const args = (DUFS_ARGO_TOKEN && DUFS_ARGO_DOMAIN) ? ['tunnel','run','--token',DUFS_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${WEB_PORT}`,'--no-autoupdate'];
             const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe']});
@@ -360,7 +371,7 @@ const genVlessLink = (host, port, remarks, type) => {
             else t.stderr.on('data', d => { const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); if (m) saveLink(m[1], 'Dufs Argo', 'public'); });
         }
         
-        // Hub Argo -> PUBLIC
+        // (C) HubProxy 隧道
         if (ENABLE_HUB && ENABLE_HUB_ARGO) {
             const args = (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) ? ['tunnel','run','--token',HUB_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${HUB_PORT}`,'--no-autoupdate'];
             const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe']});
@@ -371,16 +382,16 @@ const genVlessLink = (host, port, remarks, type) => {
     console.log('✅ Initialized.');
   } catch (e) { process.exit(1); }
 
-  // 30秒后删除临时文件（包含所有敏感链接），内存中仅保留 PUBLIC_LINKS
+  // 30秒后删除 tmp 临时文件夹 (安全措施：防止敏感配置泄露)
   setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
 
-  // 6小时报告：清屏并仅显示 PUBLIC_LINKS (Dufs/Hub Argo)
+  // 6小时报告一次 (仅显示公开链接)
   setInterval(() => {
-      process.stdout.write('\033c');
+      process.stdout.write('\033c'); // 清屏
       console.log(`\n🕒 Report [${new Date().toISOString()}]`);
       if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
   }, 21600000);
   
-  // 5分钟简单保活
+  // 5分钟保活 (防止进程因无输出被平台杀死)
   setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
 })();
