@@ -252,7 +252,7 @@ const genVlessLink = (host, port, remarks, type) => {
     }
 
      if (ARGO_DOMAIN) {
-             saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo-Domain`, 'argo'), 'Argo-Domain-Static');
+             saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Domain`, 'argo'), 'Argo-Domain-Static');
              }
     // --- 启动 Argo (伪装成 libuv) ---
     if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
