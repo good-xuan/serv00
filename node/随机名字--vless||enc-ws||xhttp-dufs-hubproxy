@@ -308,7 +308,6 @@ const genVlessLink = (host, port, remarks, type) => {
             saveLink(`User: ${DUFS_USER} / Pass: ${DUFS_PASSWORD}`, 'Dufs Auth', 'hidden'); 
         }
         spawn(DUFS_BIN, args, {stdio:'ignore',detached:true}).unref();
-        saveLink(`http://127.0.0.1:${WEB_PORT}`, 'Dufs Local', 'hidden');
     }
 
     // --------------------------------------------------------
@@ -320,7 +319,6 @@ const genVlessLink = (host, port, remarks, type) => {
             stdio: 'ignore', detached: true, 
             env: { ...process.env, PORT: String(HUB_PORT), SERVER_PORT: String(HUB_PORT) }
         }).unref();
-        saveLink(`http://127.0.0.1:${HUB_PORT}`, 'HubProxy Local', 'hidden');
     }
 
     // --------------------------------------------------------
