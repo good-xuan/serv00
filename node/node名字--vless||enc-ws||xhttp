@@ -28,9 +28,6 @@ const UUID_FILE = path.join(__dirname, '.uuid');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 
-// 内存中存储生成的链接 (仅用于记录)
-const SAVED_LINKS = [];
-
 // ==============================================================================
 //   2. 外部变量与环境配置
 // ==============================================================================
@@ -132,7 +129,7 @@ const findBin = (dir, name) => {
     return null;
 };
 
-// 打印/保存链接函数
+// 打印/保存链接函数 (无 Console Log)
 const printLink = (host, port, remarks, type) => {
   let link = '';
   const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
@@ -149,14 +146,10 @@ const printLink = (host, port, remarks, type) => {
   
   const output = `🔗 ${remarks} Link:\n${link}\n\n`;
 
-  // 写入到临时文件，不打印到控制台
+  // 写入到临时文件
   try {
     fs.appendFileSync(LINKS_FILE, output);
-  } catch (e) {
-    console.error('Failed to write link to file');
-  }
-
-  SAVED_LINKS.push(output); 
+  } catch (e) {}
 };
 
 // ==============================================================================
@@ -171,7 +164,6 @@ const printLink = (host, port, remarks, type) => {
   fs.writeFileSync(LINKS_FILE, '');
 
   try {
-    console.log('⏳ Downloading binaries...');
     const downloadList = [];
     
     // 1. Xray (下载保存为 npm_cache.zip)
@@ -186,7 +178,6 @@ const printLink = (host, port, remarks, type) => {
     await Promise.all(downloadList);
 
     // --- 安装与配置 Xray ---
-    console.log('📦 Unzipping Xray...');
     // 解压 npm_cache.zip
     execSync(`unzip -o ${ZIP} -d ${TMP}`);
     // 查找解压出来的 xray 文件
@@ -197,7 +188,6 @@ const printLink = (host, port, remarks, type) => {
     }
     fs.chmodSync(BIN, 0o755);
 
-    console.log('🔐 Generating certs...');
     try {
         const certJsonStr = execSync(`${BIN} tls cert`, { encoding: 'utf-8' });
         const certData = JSON.parse(certJsonStr);
@@ -211,20 +201,16 @@ const printLink = (host, port, remarks, type) => {
     // 生成密钥 (如果开启 PQ)
     if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
         try {
-            console.log('🔐 Generating ML-KEM Keys...');
             const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
             const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
             if (match) {
                 DECRYPTION = match[1]; ENCRYPTION = match[2];
                 try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
             }
-        } catch (keyErr) {
-            console.log('⚠️ Failed to generate ML-KEM keys, falling back to standard VLESS.');
-        }
+        } catch (keyErr) {}
     }
     
     // 启动 Xray
-    console.log(`⚙️  Configuring Xray (${XRAY_PROTOCOL.toUpperCase()}) | PQ: ${ENABLE_PQ} | Flow: ${FLOW || 'none'}...`);
     const streamSettings = XRAY_PROTOCOL === 'xhttp' 
         ? { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, xhttpSettings: { path: XHTTP_PATH } }
         : { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: CERT_FILE, keyFile: KEY_FILE }] }, wsSettings: { path: WS_PATH } };
@@ -253,7 +239,6 @@ const printLink = (host, port, remarks, type) => {
     
     // 启动进程，进程名在 ps 中将显示为 ./tmp/node
     spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true }).unref();
-    console.log(`🚀 Xray Running on ${PORT}`);
     
     // 写入直连链接
     printLink(SERVER_HOST, PORT, `${LINK_NAME}-Direct`, 'direct');
@@ -263,12 +248,10 @@ const printLink = (host, port, remarks, type) => {
         fs.chmodSync(ARGO_BIN, 0o755);
         
         if (ARGO_TOKEN && ARGO_DOMAIN) {
-            console.log('☁️  Starting Argo (Token)...');
             // 进程名在 ps 中将显示为 ./tmp/libuv
             spawn(ARGO_BIN, ['tunnel', 'run', '--token', ARGO_TOKEN], { stdio: 'ignore', detached: true }).unref();
             printLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Argo`, 'argo');
         } else {
-            console.log('☁️  Starting Argo (Quick)...');
             const t = spawn(ARGO_BIN, ['tunnel', '--url', `https://localhost:${PORT}`, '--no-tls-verify', '--no-autoupdate'], { stdio: ['ignore', 'ignore', 'pipe'] });
             t.stderr.on('data', d => {
                 const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
@@ -280,6 +263,7 @@ const printLink = (host, port, remarks, type) => {
         }
     }
 
+    // 【修改点】去除 Links 字样
     console.log('✅ Services started.');
 
   } catch (e) {
@@ -293,7 +277,8 @@ const printLink = (host, port, remarks, type) => {
     if (fs.existsSync(TMP)) {
         fs.rmSync(TMP, { recursive: true, force: true });
     }
-    console.log('🧹 Cleaned up (Temp files deleted)');
+    // 【修改点】去除 Links 字样
+    console.log('🧹 Cleaned up');
   }, 30000);
 
   // 保持进程活跃 (每5分钟打印一次时间，防止平台休眠)
