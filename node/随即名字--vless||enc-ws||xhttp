@@ -1,15 +1,16 @@
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
 
 // ==============================================================================
-//   1. 基础配置与完全随机化
+//   1. 基础配置与完全随机化 (Randomization)
 // ==============================================================================
+// 随机生成 4-8 位长度的字符串，用于混淆文件名
 const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const randomStr = () => Math.random().toString(36).substring(2, 2 + randomInt(4, 8));
 
 const TMP = path.join(__dirname, 'tmp');
 
-// 随机文件名定义 (仅保留 Xray, Argo, FRP)
-const BIN_NAME = randomStr();           
+// 定义随机文件名，防止特征检测
+const BIN_NAME = randomStr();            
 const ARGO_NAME = randomStr();          
 const FRPC_NAME = randomStr();          
 
@@ -31,51 +32,52 @@ const FRPC_TAR = path.join(TMP, FRPC_TAR_NAME);
 const CERT_FILE = path.join(TMP, 'cert.pem');
 const KEY_FILE = path.join(TMP, 'key.pem');
 
-// 持久化文件
+// 持久化文件 (重启后保留 UUID 等信息)
 const UUID_FILE = path.join(__dirname, '.uuid');
 const KEYS_FILE = path.join(__dirname, '.keys');
 const PATHS_FILE = path.join(__dirname, '.paths');
 
-// 内存存储 (虽然移除了 Dufs/Hub，保留此结构以防未来扩展)
+// 内存存储：虽然移除了 Dufs/Hub，保留结构以防后续扩展
 const PUBLIC_LINKS = [];
 
 // 端口配置
-const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); 
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // 主端口
 
 // ==============================================================================
-//   2. 环境配置
+//   2. 环境配置 (Environment Configuration)
 // ==============================================================================
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 
 // --- 基础设置 ---
-const LINK_NAME = process.env.LINK_NAME || 'Node';       
-const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; 
-const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     
+const LINK_NAME = process.env.LINK_NAME || 'Node';       // 节点备注名称前缀
+const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (用于 SNI 和 Argo 宿主)
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     // 服务器物理 IP (可选，用于生成直连链接)
 
 // --- Xray 核心协议 ---
-const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 'ws' or 'xhttp'
-const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; 
-const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     
-const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; // 传输协议: 'ws' (WebSocket) 或 'xhttp' (HTTP/2)
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; // Xray 总开关: true/false
+const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     // 后量子加密 (ML-KEM) 开关: true/false
+const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        // 流控模式: 开启 PQ 时强制使用 Vision
 
-// --- Argo 配置 (仅保留 Xray) ---
-const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';           
-const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false'; 
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                   
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                 
+// --- Argo (Cloudflare Tunnel) 配置 ---
+const ENABLE_ARGO = process.env.ENABLE_ARGO !== 'false';           // Argo 总开关
+const ENABLE_MAIN_ARGO = process.env.ENABLE_MAIN_ARGO !== 'false'; // 是否为 Xray 启用 Argo
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                   // 固定 Token (为空则使用临时 Quick Tunnel)
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                 // 固定域名 (配合 Token 使用)
 
-// --- FRP 配置 (仅保留 Xray) ---
-const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; 
-const FRPS_PORT = process.env.FRPS_PORT || '7000';         
-const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  
+// --- FRP 内网穿透配置 ---
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; // FRP 服务端地址
+const FRPS_PORT = process.env.FRPS_PORT || '7000';         // FRP 服务端端口
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  // FRP 认证 Token
 
-const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; 
-const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; 
+// FRP 隧道域名/端口映射
+const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; // Xray HTTPS 穿透域名
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; // Xray TCP 直连远程端口
 
 const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DOMAIN || FRP_XRAY_DIRECT);
 
 // ==============================================================================
-//   3. 初始化 (UUID/路径生成)
+//   3. 初始化 (UUID/Keys/Path)
 // ==============================================================================
 let uuid = process.env.UUID || '';
 if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
@@ -137,7 +139,9 @@ const findBin = (dir, name) => {
     }} catch (e) {} return null;
 };
 
-// saveLink: 'hidden' (默认) 写文件不打印; 'public' 写文件+打印 (目前没有 public 链接了)
+// 【核心逻辑】saveLink
+// 'hidden': 仅写入临时文件，30秒后物理删除，不打印到控制台
+// 'public': 写入临时文件 + 存入内存 + 打印到控制台 (目前仅 Xray，默认为 hidden)
 const saveLink = (content, title = '', type = 'hidden') => {
     const fileOutput = title ? `[${title}] ${content}` : content;
     try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n', 'utf-8'); } catch(e) {}
@@ -177,11 +181,47 @@ const genVlessLink = (host, port, remarks, type) => {
         execSync(`unzip -o ${ZIP} -d ${TMP}`);
         const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
         
-        try { const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); fs.writeFileSync(KEY_FILE, c.key.join('\n')); } catch(e) { fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); }
-        if (ENABLE_PQ && (!DECRYPTION||!ENCRYPTION)) { try { const o=execSync(`${BIN} vlessenc`,{encoding:'utf-8'}); const m=o.match(/"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/); if(m){DECRYPTION=m[1];ENCRYPTION=m[2];fs.writeFileSync(KEYS_FILE,JSON.stringify({decryption:DECRYPTION,encryption:ENCRYPTION}));} }catch(e){} }
+        // 生成 TLS 证书
+        try { 
+            const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
+            fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
+            fs.writeFileSync(KEY_FILE, c.key.join('\n')); 
+        } catch(e) { 
+            fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); 
+        }
 
-        const stream = XRAY_PROTOCOL === 'xhttp' ? {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
-        fs.writeFileSync(CFG, JSON.stringify({log:{access:'none',error:'none',loglevel:'none'},inbounds:[{port:PORT,listen:'0.0.0.0',protocol:'vless',settings:{clients:[{id:uuid,flow:FLOW}],decryption:(ENABLE_PQ&&DECRYPTION)?DECRYPTION:"none"},streamSettings:stream}],outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]}));
+        // --- 生成/检查 ML-KEM 密钥 ---
+        if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
+            try {
+                const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+                const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                if (match) {
+                    DECRYPTION = match[1]; 
+                    ENCRYPTION = match[2];
+                    try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+                }
+            } catch (keyErr) {}
+        }
+
+        const stream = XRAY_PROTOCOL === 'xhttp' ? 
+            {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
+            {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
+        
+        fs.writeFileSync(CFG, JSON.stringify({
+            log:{access:'none',error:'none',loglevel:'none'},
+            inbounds:[{
+                port:PORT,
+                listen:'0.0.0.0',
+                protocol:'vless',
+                settings:{
+                    clients:[{id:uuid,flow:FLOW}],
+                    decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none"
+                },
+                streamSettings:stream
+            }],
+            outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]
+        }));
+        
         spawn(BIN, ['-c', CFG], {stdio:'ignore',detached:true}).unref();
         
         if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
@@ -214,14 +254,8 @@ const genVlessLink = (host, port, remarks, type) => {
   // 30秒后删除临时文件（包含所有敏感链接）
   setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
 
-  // 6小时报告 (移除了公开服务，所以通常会显示空)
+  // 报告/保活循环
   setInterval(() => {
-      process.stdout.write('\033c');
-      console.log(`\n🕒 Report [${new Date().toISOString()}]`);
-      if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
-      else console.log("No public links available.");
-  }, 21600000);
-  
-  // 5分钟简单保活
-  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+      console.log('💗 Keep alive', new Date().toISOString());
+  }, 300000);
 })();
