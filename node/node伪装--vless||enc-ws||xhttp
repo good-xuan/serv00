@@ -229,8 +229,8 @@ const genVlessLink = (host, port, remarks, type) => {
                 },
                 streamSettings:stream
             }],
-            dns: {servers:["https+local://1.1.1.1/dns-query"], disableCache: true},
-            outbounds:[{protocol:'freedom',tag:'direct'},{protocol:'blackhole',tag:'block'}]
+            dns: {servers:["https+local://1.1.1.1/dns-query"]},
+            outbounds:[{protocol:'freedom',tag:'direct',settings: { domainStrategy: "UseIP"  }},{protocol:'blackhole',tag:'block'}]
         }));
         
         // 启动 Xray 并注入 GOGC 内存优化环境变量
@@ -267,7 +267,6 @@ const genVlessLink = (host, port, remarks, type) => {
         if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
              if (ARGO_TOKEN && ARGO_DOMAIN) {
                  spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
-                 saveLink(genVlessLink(ARGO_DOMAIN,443,`${LINK_NAME}-Argo`,'argo'),'Argo-Xray');
              } else {
                  const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
                  t.stderr.on('data', d => { 
