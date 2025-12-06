@@ -67,7 +67,7 @@ const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';           // 流控 (开启 PQ
 // 作用：GOGC 控制垃圾回收频率。
 // 设置为 50：当新分配内存达到上次 GC 后存活内存的 50% 时触发回收。
 // 效果：相比默认的 100，这会牺牲一点 CPU 性能来换取更低的内存占用，防止 OOM。
-const GO_GC_VAR = process.env.GOGC || '50';
+const GO_GC_VAR = process.env.GOGC || '100';
 
 // --- Argo (Cloudflare Tunnel) 配置 ---
 const ENABLE_CLOUDFLARED = process.env.ENABLE_CLOUDFLARED !== 'false'; // 总开关
