@@ -14,7 +14,7 @@ const limitBytes = Math.floor(mem * 0.85);
 const GOMEMLIMIT = limitBytes + 'B';
 
 // 打印优化：显示 总内存(MB) -> 限制内存(MB) [原始字节]
-console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> GOMEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
 
 // ==============================================================================
 //   1. 基础配置与防特征检测 (Obfuscation)
