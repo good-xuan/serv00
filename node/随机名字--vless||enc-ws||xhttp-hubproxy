@@ -10,7 +10,7 @@ const getMemLimit = () => {
 };
 
 const mem = getMemLimit();
-const limitBytes = Math.floor(mem * 0.85);
+const limitBytes = Math.floor(mem * 0.9);
 const GOMEMLIMIT = limitBytes + 'B';
 
 // 打印优化：显示 总内存(MB) -> 限制内存(MB) [原始字节]
