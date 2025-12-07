@@ -1,6 +1,22 @@
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
 
 // ==============================================================================
+//  简化版：动态内存计算 (Auto Memory Limit)
+// ==============================================================================
+const getMemLimit = () => {
+  const f = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+  const limit = f ? parseInt(fs.readFileSync(f, 'utf8')) : 0;
+  return (limit > 0 && limit < 9e15) ? limit : require('os').totalmem();
+};
+
+const mem = getMemLimit();
+const limitBytes = Math.floor(mem * 0.85);
+const GOMEMLIMIT = limitBytes + 'B';
+
+// 打印优化：显示 总内存(MB) -> 限制内存(MB) [原始字节]
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> GOMEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+
+// ==============================================================================
 //   1. 基础配置与防特征检测 (Obfuscation)
 //   作用：通过随机化文件名和路径，规避云平台的静态文件扫描和特征检测
 // ==============================================================================
