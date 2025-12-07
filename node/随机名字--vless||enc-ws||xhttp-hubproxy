@@ -4,17 +4,29 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 //  简化版：动态内存计算 (Auto Memory Limit)
 // ==============================================================================
 const getMemLimit = () => {
+  // 优先读取 Cgroup (容器/Docker环境)
   const f = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
   const limit = f ? parseInt(fs.readFileSync(f, 'utf8')) : 0;
+  // 如果读取不到或数值异常大，回退到物理内存
   return (limit > 0 && limit < 9e15) ? limit : require('os').totalmem();
 };
 
 const mem = getMemLimit();
+// 预留 10% 给 Node.js 主进程，90% 给子进程
 const limitBytes = Math.floor(mem * 0.9);
 const GOMEMLIMIT = limitBytes + 'B';
+const GOGC = process.env.GOGC || '100'; 
+
+// ✅ [核心修改] 创建统一的运行环境对象，确保 GOMEMLIMIT 被传入
+const RUN_ENV = {
+    ...process.env,
+    GOGC: GOGC,
+    GOMEMLIMIT: GOMEMLIMIT  // 关键：将计算好的内存限制注入环境变量
+};
 
 // 打印优化：显示 总内存(MB) -> 限制内存(MB) [原始字节]
-console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+//console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT}) | GC: ${GOGC}`);
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT}) );
 
 // ==============================================================================
 //   1. 基础配置与防特征检测 (Obfuscation)
@@ -78,11 +90,6 @@ const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws';
 const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; 
 const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     // 抗量子加密 (未来标准)
 const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        
-
-// [关键优化] 内存控制 (Memory Optimization)
-// 作用：PaaS 平台内存通常较小 (512MB)。
-// 设置 GOGC=20 让 Go 语言更激进地回收内存 (用 CPU 换内存)，防止进程因 OOM 被杀。
-const GOGC  = process.env.GOGC || '100'; 
 
 // --- HubProxy 配置 (Docker 镜像加速) ---
 const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; 
