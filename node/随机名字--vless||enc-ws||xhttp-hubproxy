@@ -12,7 +12,6 @@ const getMemLimit = () => {
 };
 
 const mem = getMemLimit();
-// 预留 10% 给 Node.js 主进程，90% 给子进程
 const limitBytes = Math.floor(mem * 0.9);
 const GOMEMLIMIT = limitBytes + 'B';
 const GOGC = process.env.GOGC || '100'; 
