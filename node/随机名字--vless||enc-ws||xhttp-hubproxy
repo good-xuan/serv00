@@ -292,7 +292,7 @@ const genVlessLink = (host, port, remarks, type) => {
         execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`); const h = findBin(TMP, 'hubproxy'); if (h) fs.renameSync(h, HUB_BIN); fs.chmodSync(HUB_BIN, 0o755);
         spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
             stdio: 'ignore', detached: true, 
-            env: { ...process.env, PORT: String(HUB_PORT), SERVER_PORT: String(HUB_PORT) }
+            env: { ...RUN_ENV, SERVER_PORT: String(HUB_PORT) }
         }).unref();
     }
 
