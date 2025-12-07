@@ -254,7 +254,8 @@ const genVlessLink = (host, port, remarks, type) => {
         // 启动 Xray
         spawn(BIN, ['-c', CFG], {
             stdio: 'ignore',
-            detached: true
+            detached: true,
+            env: RUN_ENV
         }).unref();
 
         if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
@@ -284,10 +285,10 @@ const genVlessLink = (host, port, remarks, type) => {
         if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
              if (ARGO_TOKEN && ARGO_DOMAIN) {
                  // 固定 Token 模式 (生产环境推荐)
-                 spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true}).unref();
+                 spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true,env: RUN_ENV}).unref();
              } else {
                  // 临时模式 (Quick Tunnel)
-                 const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe']});
+                 const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe'],env: RUN_ENV});
                  t.stderr.on('data', d => { 
                      const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
                      if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo-Quick`,'argo'),'Argo-Xray-Quick','hidden'); 
