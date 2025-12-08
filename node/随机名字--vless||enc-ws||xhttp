@@ -14,12 +14,11 @@ const getMemLimit = () => {
 const mem = getMemLimit();
 const limitBytes = Math.floor(mem * 0.9);
 const GOMEMLIMIT = limitBytes + 'B';
-const GOGC = process.env.GOGC || '100'; 
+//const GOGC = process.env.GOGC || '100'; 
 
 // ✅ [核心修改] 创建统一的运行环境对象，确保 GOMEMLIMIT 被传入
 const RUN_ENV = {
     ...process.env,
-    GOGC: GOGC,
     GOMEMLIMIT: GOMEMLIMIT  // 关键：将计算好的内存限制注入环境变量
 };
 
