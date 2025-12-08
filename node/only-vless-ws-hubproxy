@@ -1,0 +1,256 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// ==============================================================================
+//  简化版：动态内存计算 (Auto Memory Limit)
+// ==============================================================================
+const getMemLimit = () => {
+  const f = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+  const limit = f ? parseInt(fs.readFileSync(f, 'utf8')) : 0;
+  return (limit > 0 && limit < 9e15) ? limit : require('os').totalmem();
+};
+
+const mem = getMemLimit();
+const limitBytes = Math.floor(mem * 0.9);
+const GOMEMLIMIT = limitBytes + 'B';
+
+const RUN_ENV = {
+    ...process.env,
+    GOMEMLIMIT: GOMEMLIMIT
+};
+
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+
+// ==============================================================================
+//   1. 基础配置
+// ==============================================================================
+const TMP = path.join(__dirname, 'tmp');
+const randomStr = () => Math.random().toString(36).substring(2, 6 + Math.floor(Math.random() * 5));
+
+const BIN_NAME = randomStr();              
+const HUB_NAME = randomStr();                 
+const FRPC_NAME = randomStr();              
+
+const ZIP_NAME = randomStr() + '.zip';   
+const HUB_TAR_NAME = randomStr() + '.tar.gz';
+const FRPC_TAR_NAME = randomStr() + '.tar.gz';
+const LINKS_FILE_NAME = `LINK-${randomStr()}.txt`;
+
+const BIN = path.join(TMP, BIN_NAME);
+const HUB_BIN = path.join(TMP, HUB_NAME);
+const FRPC_BIN = path.join(TMP, FRPC_NAME);
+const LINKS_PATH = path.join(TMP, LINKS_FILE_NAME);
+const CFG = path.join(TMP, 'config.json');
+const FRPC_CFG = path.join(TMP, 'frpc.ini');
+const ZIP = path.join(TMP, ZIP_NAME);
+const HUB_TAR = path.join(TMP, HUB_TAR_NAME);
+const FRPC_TAR = path.join(TMP, FRPC_TAR_NAME);
+
+// 持久化文件
+const UUID_FILE = path.join(__dirname, '.uuid');
+const PATHS_FILE = path.join(__dirname, '.paths');
+
+const PUBLIC_LINKS = [];
+
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
+const HUB_PORT = PORT + 1; 
+const WS_PORT = PORT + 2;  
+
+// ==============================================================================
+//   2. 环境配置
+// ==============================================================================
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+
+const LINK_NAME = process.env.LINK_NAME || 'Node';      
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1'; 
+const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // ✅ 恢复 CDN_HOST 用于链接生成
+
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; 
+const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; 
+
+// Custom Domain: 仅用于生成 TLS 链接
+const CUSTOM_DOMAIN = process.env.CUSTOM_DOMAIN || '';                     
+
+// --- FRP 配置 ---
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; 
+const FRPS_PORT = process.env.FRPS_PORT || '7000';         
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; 
+const FRP_HUB_DOMAIN  = process.env.FRP_HUB_DOMAIN || '';  
+
+const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DIRECT || FRP_HUB_DOMAIN);
+
+// ==============================================================================
+//   3. 初始化逻辑
+// ==============================================================================
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+}
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+let WS_PATH = process.env.WS_PATH || '';
+if (!WS_PATH && fs.existsSync(PATHS_FILE)) {
+    try { const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8')); if (!WS_PATH) WS_PATH = storedPaths.ws || ''; } catch(e) {}
+}
+if (!WS_PATH) WS_PATH = '/' + Math.random().toString(36).substring(2, 8);
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH })); } catch(e) {}
+
+// ==============================================================================
+//   4. 辅助工具函数
+// ==============================================================================
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) return download(res.headers.location, dest).then(resolve).catch(reject);
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+const getFrpUrl = () => new Promise((resolve) => {
+    const fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz';
+    https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        try { if (res.statusCode === 302) {
+                const parts = res.headers.location.split('/'); let tag = parts[parts.length - 1]; if (!tag.startsWith('v')) tag = 'v' + tag;
+                resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${tag.replace(/^v/, '')}_linux_amd64.tar.gz`);
+            } else resolve(fallback);
+        } catch(e) { resolve(fallback); }
+    }).on('error', () => resolve(fallback));
+});
+
+const getHubProxyUrl = () => new Promise((resolve) => {
+    const fallback = 'https://github.com/sky22333/hubproxy/releases/download/v1.1.9/hubproxy-v1.1.9-linux-amd64.tar.gz';
+    https.get('https://github.com/sky22333/hubproxy/releases/latest', (res) => {
+        try { const tag = res.headers.location ? path.basename(res.headers.location) : 'v1.1.9'; resolve(`https://github.com/sky22333/hubproxy/releases/download/${tag}/hubproxy-${tag}-linux-amd64.tar.gz`);
+        } catch(e) { resolve(fallback); }
+    }).on('error', () => resolve(fallback));
+});
+
+const findBin = (dir, name) => {
+    try { const files = fs.readdirSync(dir, { withFileTypes: true }); for (const f of files) { const fullPath = path.join(dir, f.name);
+            if (f.isDirectory()) { const res = findBin(fullPath, name); if (res) return res; } 
+            else if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz')) return fullPath;
+    }} catch (e) {} return null;
+};
+
+const saveLink = (content, title = '', type = 'hidden') => {
+    const fileOutput = title ? `${title}\n${content}` : content;
+    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
+    if (type === 'public') {
+        const consoleOutput = `🔗 ${title}:\n${content}`;
+        PUBLIC_LINKS.push(consoleOutput);
+        console.log(consoleOutput);
+    }
+};
+
+const genVlessLink = (host, port, remarks) => {
+    // 基础直连 WS 链接生成
+    return `vless://${uuid}@${host}:${port}?security=none&type=ws&path=${encodeURIComponent(WS_PATH)}&host=${host}&sni=${host}#${remarks}`;
+};
+
+// ==============================================================================
+//   5. 主程序流程
+// ==============================================================================
+(async () => {
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
+
+  try {
+    const dl = [];
+    if (ENABLE_XRAY) dl.push(download(XRAY_URL, ZIP));
+    if (ENABLE_HUB) dl.push(download(await getHubProxyUrl(), HUB_TAR));
+    if (NEED_FRP) dl.push(download(await getFrpUrl(), FRPC_TAR));
+    await Promise.all(dl);
+
+    // --------------------------------------------------------
+    // 模块 1: Xray
+    // --------------------------------------------------------
+    if (ENABLE_XRAY) {
+        execSync(`unzip -o ${ZIP} -d ${TMP}`);
+        const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
+        
+        const fallbacks = [];
+        fallbacks.push({ path: WS_PATH, dest: WS_PORT, xver: 0 }); // 路径分流
+        if (ENABLE_HUB) fallbacks.push({ dest: HUB_PORT, xver: 0 }); // 默认分流
+
+        fs.writeFileSync(CFG, JSON.stringify({
+            log:{access:'none',error:'none',loglevel:'none'},
+            inbounds:[
+                {
+                    port: PORT, listen: '0.0.0.0', protocol: 'vless',
+                    settings: { 
+                        clients: [{id:uuid}], 
+                        decryption: "none",
+                        fallbacks: fallbacks 
+                    },
+                    streamSettings: { network: "tcp", security: "none" }
+                },
+                {
+                    port: WS_PORT, listen: '127.0.0.1', protocol: 'vless',
+                    settings: { clients: [{id:uuid}], decryption: "none" },
+                    streamSettings: {
+                        network: "ws", security: "none", wsSettings: { path: WS_PATH }
+                    }
+                }
+            ],
+            dns: {servers:["1.1.1.1"]},
+            outbounds:[{protocol:'freedom',tag:'direct',settings: { domainStrategy: "UseIP" }},{protocol:'blackhole',tag:'block'}]
+        }));
+        
+        spawn(BIN, ['-c', CFG], { stdio: 'ignore', detached: true, env: RUN_ENV }).unref();
+
+        // 1. 直连 WS 链接 (基于 IP)
+        if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-WS-IP`), 'WS-IP', 'hidden');
+
+        // 2. Custom Domain 链接 (严格按照指定格式生成)
+        if (CUSTOM_DOMAIN) {
+             const customLink = `vless://${uuid}@${CDN_HOST}:443?encryption=none&security=tls&sni=${CUSTOM_DOMAIN}&fp=firefox&alpn=h2&insecure=0&allowInsecure=0&type=ws&path=${encodeURIComponent(WS_PATH)}#${LINK_NAME}-TLS-Domain`;
+             saveLink(customLink, 'TLS-Domain', 'hidden');
+        }
+    }
+
+    // --------------------------------------------------------
+    // 模块 2: HubProxy
+    // --------------------------------------------------------
+    if (ENABLE_HUB) {
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`); const h = findBin(TMP, 'hubproxy'); if (h) fs.renameSync(h, HUB_BIN); fs.chmodSync(HUB_BIN, 0o755);
+        spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
+            stdio: 'ignore', detached: true, 
+            env: { ...RUN_ENV, SERVER_PORT: String(HUB_PORT) }
+        }).unref();
+    }
+
+    // --------------------------------------------------------
+    // 模块 3: FRP
+    // --------------------------------------------------------
+    if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`); const f = findBin(TMP, 'frpc');
+        if (f) { fs.renameSync(f, FRPC_BIN); fs.chmodSync(FRPC_BIN, 0o755);
+            const uid = uuid.substring(0, 6); let ini = `[common]\nserver_addr=${FRPS_HOST}\nserver_port=${FRPS_PORT}\ntoken=${FRPS_TOKEN}\n`;
+            
+            if (ENABLE_XRAY && FRP_XRAY_DIRECT) { 
+                ini+=`\n[xray-tcp-${uid}]\ntype=tcp\nlocal_ip=127.0.0.1\nlocal_port=${PORT}\nremote_port=${FRP_XRAY_DIRECT}\n`; 
+                saveLink(genVlessLink(FRPS_HOST, FRP_XRAY_DIRECT, `${LINK_NAME}-FRP-WS`), 'FRP-WS', 'hidden');
+            }
+
+            if (ENABLE_HUB && FRP_HUB_DOMAIN) { ini+=`\n[hub-${uid}]\ntype=http\ncustom_domains=${FRP_HUB_DOMAIN}\nlocal_port=${HUB_PORT}\n`; saveLink(`http://${FRP_HUB_DOMAIN}`,'FRP-Hub','hidden'); }
+            fs.writeFileSync(FRPC_CFG, ini); spawn(FRPC_BIN, ['-c', FRPC_CFG], {stdio:'ignore',detached:true,env: RUN_ENV}).unref();
+        }
+    }
+
+    console.log('✅ Initialized.');
+  } catch (e) { process.exit(1); }
+
+  setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
+
+  setInterval(() => {
+      process.stdout.write('\033c'); 
+      console.log(`\n🕒 Report [${new Date().toISOString()}]`);
+      if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
+  }, 21600000); 
+   
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
