@@ -1,0 +1,346 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+// ==============================================================================
+//  简化版：动态内存计算 (Auto Memory Limit)
+// ==============================================================================
+const getMemLimit = () => {
+  // 优先读取 Cgroup (容器/Docker环境)
+  const f = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+  const limit = f ? parseInt(fs.readFileSync(f, 'utf8')) : 0;
+  // 如果读取不到或数值异常大，回退到物理内存
+  return (limit > 0 && limit < 9e15) ? limit : require('os').totalmem();
+};
+
+const mem = getMemLimit();
+const limitBytes = Math.floor(mem * 0.9);
+const GOMEMLIMIT = limitBytes + 'B';
+//const GOGC = process.env.GOGC || '100'; 
+
+// ✅ [核心修改] 创建统一的运行环境对象，确保 GOMEMLIMIT 被传入
+const RUN_ENV = {
+    ...process.env,
+    GOMEMLIMIT: GOMEMLIMIT  // 关键：将计算好的内存限制注入环境变量
+};
+
+// 打印优化：显示 总内存(MB) -> 限制内存(MB) [原始字节]
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+
+// ==============================================================================
+//   1. 基础配置与防特征检测 (Obfuscation)
+//   作用：通过随机化文件名和路径，规避云平台的静态文件扫描和特征检测
+// ==============================================================================
+const TMP = path.join(__dirname, 'tmp');
+
+// 随机生成 4-8 位字符串，用于重命名下载的二进制文件
+const randomStr = () => Math.random().toString(36).substring(2, 6 + Math.floor(Math.random() * 5));
+
+// 定义随机文件名 (Binaries & Archives)
+const BIN_NAME = randomStr();              
+const HUB_NAME = randomStr();              
+const ARGO_NAME = randomStr();             
+const FRPC_NAME = randomStr();             
+
+const ZIP_NAME = randomStr() + '.zip';  
+const HUB_TAR_NAME = randomStr() + '.tar.gz';
+const FRPC_TAR_NAME = randomStr() + '.tar.gz';
+const LINKS_FILE_NAME = `LINK-${randomStr()}.txt`; // 最终链接保存的文件名，随机化防止被探测
+
+// 构造完整的文件路径
+const BIN = path.join(TMP, BIN_NAME);
+const HUB_BIN = path.join(TMP, HUB_NAME);
+const ARGO_BIN = path.join(TMP, ARGO_NAME);
+const FRPC_BIN = path.join(TMP, FRPC_NAME);
+const LINKS_PATH = path.join(TMP, LINKS_FILE_NAME);
+const CFG = path.join(TMP, 'config.json');      // Xray 配置文件 (运行时生成)
+const FRPC_CFG = path.join(TMP, 'frpc.ini');    // FRP 配置文件 (运行时生成)
+const ZIP = path.join(TMP, ZIP_NAME);
+const HUB_TAR = path.join(TMP, HUB_TAR_NAME);
+const FRPC_TAR = path.join(TMP, FRPC_TAR_NAME);
+const CERT_FILE = path.join(TMP, 'cert.pem');   // 自签 TLS 证书
+const KEY_FILE = path.join(TMP, 'key.pem');     // 自签 TLS 私钥
+
+// 持久化文件路径 (关键)
+// 作用：PaaS 容器重启后通常会重置临时文件，但部分目录(如当前目录)可能持久化。
+// 保存这些文件是为了保证重启后 UUID 和路径不变，以免客户端连接失效。
+const UUID_FILE = path.join(__dirname, '.uuid');
+const KEYS_FILE = path.join(__dirname, '.keys');
+const PATHS_FILE = path.join(__dirname, '.paths');
+
+// 内存存储：用于存放公开的链接 (如 Hub 的 Argo 链接)，以便定时输出到控制台
+const PUBLIC_LINKS = [];
+
+// 端口分配逻辑
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000); // 主端口 (PaaS 平台分配)
+const HUB_PORT = PORT + 1; // HubProxy 内部端口 (紧邻主端口，避免冲突)
+
+// ==============================================================================
+//   2. 环境配置与开关 (Environment Variables)
+// ==============================================================================
+const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
+
+const LINK_NAME = process.env.LINK_NAME || 'Node';      
+const CDN_HOST = process.env.CDN_HOST || 'www.visa.com.sg'; // 伪装域名 (用于 SNI)
+const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';     
+
+// --- Xray 核心配置 ---
+const XRAY_PROTOCOL = process.env.XRAY_PROTOCOL || 'ws'; 
+const ENABLE_XRAY = process.env.ENABLE_XRAY !== 'false'; 
+const ENABLE_PQ = process.env.ENABLE_PQ !== 'false';     // 抗量子加密 (未来标准)
+const FLOW = ENABLE_PQ ? 'xtls-rprx-vision' : '';        
+
+// --- HubProxy 配置 (Docker 镜像加速) ---
+const ENABLE_HUB = process.env.ENABLE_HUB !== 'false'; 
+
+// --- Argo (Cloudflare Tunnel) 配置 ---
+const ENABLE_CLOUDFLARED = process.env.ENABLE_CLOUDFLARED !== 'false'; 
+// 1. Xray 业务 (代理流量)
+const ENABLE_ARGO_XRAY = process.env.ENABLE_ARGO_XRAY !== 'false';      
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';                        
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';                      
+// 2. HubProxy 业务 (镜像流量)
+const ENABLE_HUB_ARGO = process.env.ENABLE_HUB_ARGO !== 'false';    
+const HUB_ARGO_TOKEN = process.env.HUB_ARGO_TOKEN || '';            
+const HUB_ARGO_DOMAIN = process.env.HUB_ARGO_DOMAIN || '';          
+
+// --- FRP 内网穿透配置 ---
+const FRPS_HOST = process.env.FRPS_HOST || 'uss.afrp.net'; 
+const FRPS_PORT = process.env.FRPS_PORT || '7000';          
+const FRPS_TOKEN = process.env.FRPS_TOKEN ||  'afrp.net';  
+
+const FRP_XRAY_DOMAIN = process.env.FRP_XRAY_DOMAIN || ''; 
+const FRP_XRAY_DIRECT = process.env.FRP_XRAY_DIRECT || ''; 
+const FRP_HUB_DOMAIN  = process.env.FRP_HUB_DOMAIN || '';  
+
+// 判断是否需要下载并运行 FRP
+const NEED_FRP = FRPS_HOST && FRPS_TOKEN && (FRP_XRAY_DOMAIN || FRP_XRAY_DIRECT || FRP_HUB_DOMAIN);
+
+// ==============================================================================
+//   3. 初始化逻辑 (持久化数据读取)
+// ==============================================================================
+// 读取或生成 UUID (VLESS 用户 ID)
+let uuid = process.env.UUID || '';
+if (!uuid && fs.existsSync(UUID_FILE)) { try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {} }
+if (!uuid) {
+    // 如果没有 UUID，生成一个新的并保存
+    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+}
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// 读取或生成 WS/XHTTP 路径 (Path)
+let WS_PATH = process.env.WS_PATH || '';
+let XHTTP_PATH = process.env.XHTTP_PATH || '';
+if ((!WS_PATH || !XHTTP_PATH) && fs.existsSync(PATHS_FILE)) {
+    try {
+        const storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8'));
+        if (!WS_PATH) WS_PATH = storedPaths.ws || '';
+        if (!XHTTP_PATH) XHTTP_PATH = storedPaths.xhttp || '';
+    } catch(e) {}
+}
+if (!WS_PATH) WS_PATH = '/' + Math.random().toString(36).substring(2, 8);
+if (!XHTTP_PATH) XHTTP_PATH = '/' + Math.random().toString(36).substring(2, 8);
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// 读取或生成 ML-KEM 密钥 (抗量子加密参数)
+let DECRYPTION = ''; let ENCRYPTION = '';
+if (ENABLE_PQ) {
+    DECRYPTION = process.env.VLESS_DECRYPTION || ''; ENCRYPTION = process.env.VLESS_ENCRYPTION || '';
+    if ((!DECRYPTION || !ENCRYPTION) && fs.existsSync(KEYS_FILE)) {
+       try { const k = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8')); DECRYPTION = k.decryption||''; ENCRYPTION = k.encryption||''; } catch (e) {}
+    }
+}
+
+// ==============================================================================
+//   4. 辅助工具函数
+// ==============================================================================
+// 通用下载函数 (处理 HTTP 301/302 重定向)
+const download = (url, dest) => new Promise((resolve, reject) => {
+  (url.startsWith('https') ? https : http).get(url, res => {
+    if (res.statusCode === 301 || res.statusCode === 302) return download(res.headers.location, dest).then(resolve).catch(reject);
+    if (res.statusCode !== 200) return reject('Status ' + res.statusCode);
+    const file = fs.createWriteStream(dest);
+    res.pipe(file);
+    file.on('finish', () => file.close(resolve));
+  }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// 获取 FRP 最新版本 URL
+const getFrpUrl = () => new Promise((resolve) => {
+    const fallback = 'https://github.com/fatedier/frp/releases/download/v0.61.0/frp_0.61.0_linux_amd64.tar.gz';
+    https.get('https://github.com/fatedier/frp/releases/latest', (res) => {
+        try { if (res.statusCode === 302) {
+                const parts = res.headers.location.split('/'); let tag = parts[parts.length - 1]; if (!tag.startsWith('v')) tag = 'v' + tag;
+                resolve(`https://github.com/fatedier/frp/releases/download/${tag}/frp_${tag.replace(/^v/, '')}_linux_amd64.tar.gz`);
+            } else resolve(fallback);
+        } catch(e) { resolve(fallback); }
+    }).on('error', () => resolve(fallback));
+});
+
+// 获取 HubProxy 最新版本 URL - ✅ [已修改] 指定固定下载地址
+const getHubProxyUrl = () => Promise.resolve('https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz');
+
+// 递归查找二进制文件 (适应不同压缩包解压后的目录结构)
+const findBin = (dir, name) => {
+    try { const files = fs.readdirSync(dir, { withFileTypes: true }); for (const f of files) { const fullPath = path.join(dir, f.name);
+            if (f.isDirectory()) { const res = findBin(fullPath, name); if (res) return res; } 
+            else if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz')) return fullPath;
+    }} catch (e) {} return null;
+};
+
+// 保存链接逻辑
+const saveLink = (content, title = '', type = 'hidden') => {
+    const fileOutput = title ? `${title}\n${content}` : content;
+    try { fs.appendFileSync(LINKS_PATH, fileOutput + '\n\n', 'utf-8'); } catch(e) {}
+    if (type === 'public') {
+        const consoleOutput = `🔗 ${title}:\n${content}`;
+        PUBLIC_LINKS.push(consoleOutput);
+        console.log(consoleOutput);
+    }
+};
+
+// 生成 VLESS 链接
+const genVlessLink = (host, port, remarks, type) => {
+    const currentPath = XRAY_PROTOCOL === 'xhttp' ? XHTTP_PATH : WS_PATH;
+    const currentType = XRAY_PROTOCOL === 'xhttp' ? 'xhttp' : 'ws';
+    const encParam = (ENABLE_PQ && ENCRYPTION) ? `encryption=${ENCRYPTION}&` : '';
+    if (type === 'argo') return `vless://${uuid}@${CDN_HOST}:443?${encParam}security=tls&flow=${FLOW}&sni=${host}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}#${remarks}`;
+    return `vless://${uuid}@${host}:${port}?${encParam}security=tls&sni=${CDN_HOST}&flow=${FLOW}&fp=firefox&alpn=h2&type=${currentType}&path=${encodeURIComponent(currentPath)}&insecure=1#${remarks}`;
+};
+
+// ==============================================================================
+//   5. 主程序流程
+// ==============================================================================
+(async () => {
+  // 1. 初始化临时目录
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
+
+  try {
+    // 2. 并行下载所有开启的组件
+    const dl = [];
+    if (ENABLE_XRAY) dl.push(download(XRAY_URL, ZIP));
+    if (ENABLE_HUB) dl.push(download(await getHubProxyUrl(), HUB_TAR));
+    if (ENABLE_CLOUDFLARED) dl.push(download('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64', ARGO_BIN));
+    if (NEED_FRP) dl.push(download(await getFrpUrl(), FRPC_TAR));
+    await Promise.all(dl);
+
+    // --------------------------------------------------------
+    // 模块 1: Xray 核心服务
+    // --------------------------------------------------------
+    if (ENABLE_XRAY) {
+        execSync(`unzip -o ${ZIP} -d ${TMP}`); // 解压
+        const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
+        
+        // 生成自签 TLS 证书
+        try { 
+            const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
+            fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
+            fs.writeFileSync(KEY_FILE, c.key.join('\n')); 
+        } catch(e) { fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); }
+
+        // 生成 ML-KEM 密钥
+        if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
+            try {
+                const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+                const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                if (match) {
+                    DECRYPTION = match[1]; ENCRYPTION = match[2];
+                    try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+                }
+            } catch (keyErr) {}
+        }
+
+        // 动态生成 config.json
+        const stream = XRAY_PROTOCOL === 'xhttp' ? 
+            {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
+            {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
+        
+        fs.writeFileSync(CFG, JSON.stringify({
+            log:{access:'none',error:'none',loglevel:'none'},
+            inbounds:[{
+                port:PORT, listen:'0.0.0.0', protocol:'vless',
+                settings:{ clients:[{id:uuid,flow:FLOW}], decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none" },
+                streamSettings:stream
+            }],
+            dns: {servers:["https+local://1.1.1.1/dns-query"]},
+            outbounds:[{protocol:'freedom',tag:'direct',settings: { domainStrategy: "UseIP"  }},{protocol:'blackhole',tag:'block'}]
+        }));
+        
+        // 启动 Xray 
+        spawn(BIN, ['-c', CFG], {
+            stdio: 'ignore',
+            detached: true,
+            env: RUN_ENV
+        }).unref();
+
+        if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
+    }
+
+    // --------------------------------------------------------
+    // 模块 2: HubProxy 服务 (Docker 镜像加速) - ✅ [已恢复] 原版启动逻辑
+    // --------------------------------------------------------
+    if (ENABLE_HUB) {
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`); const h = findBin(TMP, 'hubproxy'); if (h) fs.renameSync(h, HUB_BIN); fs.chmodSync(HUB_BIN, 0o755);
+        spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
+            stdio: 'ignore', detached: true, 
+            env: { ...RUN_ENV, SERVER_PORT: String(HUB_PORT) }
+        }).unref();
+    }
+
+    // --------------------------------------------------------
+    // 模块 3: FRP 内网穿透
+    // --------------------------------------------------------
+    if (NEED_FRP && fs.existsSync(FRPC_TAR)) {
+        execSync(`tar -xzf ${FRPC_TAR} -C ${TMP}`); const f = findBin(TMP, 'frpc');
+        if (f) { fs.renameSync(f, FRPC_BIN); fs.chmodSync(FRPC_BIN, 0o755);
+            const uid = uuid.substring(0, 6); let ini = `[common]\nserver_addr=${FRPS_HOST}\nserver_port=${FRPS_PORT}\ntoken=${FRPS_TOKEN}\n`;
+            if (ENABLE_XRAY && FRP_XRAY_DOMAIN) { ini+=`\n[xray-https-${uid}]\ntype=https\ncustom_domains=${FRP_XRAY_DOMAIN}\nlocal_port=${PORT}\n`; saveLink(genVlessLink(FRP_XRAY_DOMAIN,443,`${LINK_NAME}-FRP-HTTPS`,'https-domain'),'FRP-Xray','hidden'); }
+            if (ENABLE_XRAY && FRP_XRAY_DIRECT) { ini+=`\n[xray-tcp-${uid}]\ntype=tcp\nlocal_ip=127.0.0.1\nlocal_port=${PORT}\nremote_port=${FRP_XRAY_DIRECT}\n`; saveLink(genVlessLink(FRPS_HOST,FRP_XRAY_DIRECT,`${LINK_NAME}-FRP-TCP`,'direct'),'FRP-TCP','hidden'); }
+            if (ENABLE_HUB && FRP_HUB_DOMAIN) { ini+=`\n[hub-${uid}]\ntype=http\ncustom_domains=${FRP_HUB_DOMAIN}\nlocal_port=${HUB_PORT}\n`; saveLink(`http://${FRP_HUB_DOMAIN}`,'FRP-Hub','hidden'); }
+            fs.writeFileSync(FRPC_CFG, ini); spawn(FRPC_BIN, ['-c', FRPC_CFG], {stdio:'ignore',detached:true,env: RUN_ENV}).unref();
+        }
+    }
+
+    // --------------------------------------------------------
+    // 模块 4: Argo Tunnel (Cloudflare)
+    // --------------------------------------------------------
+      if (ARGO_DOMAIN) {
+              saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
+              }
+    if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
+        fs.chmodSync(ARGO_BIN, 0o755);
+        
+        // (A) Xray 隧道
+        if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
+             if (ARGO_TOKEN && ARGO_DOMAIN) {
+                 spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true,env: RUN_ENV}).unref();
+             } else {
+                 const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe'],env: RUN_ENV});
+                 t.stderr.on('data', d => { 
+                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
+                     if (m) saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo-Quick`,'argo'),'Argo-Xray-Quick','hidden'); 
+                 });
+             }
+        }
+        
+        // (B) HubProxy 隧道
+        if (ENABLE_HUB && ENABLE_HUB_ARGO) {
+            const args = (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) ? ['tunnel','run','--token',HUB_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${HUB_PORT}`,'--no-autoupdate'];
+            const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe'],env: RUN_ENV});
+            if (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) saveLink(`https://${HUB_ARGO_DOMAIN}`, 'Hub Argo', 'public');
+            else t.stderr.on('data', d => { const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); if (m) saveLink(m[1], 'Hub Argo', 'public'); });
+        }
+    }
+    console.log('✅ Initialized.');
+  } catch (e) { process.exit(1); }
+
+  setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
+
+  setInterval(() => {
+      process.stdout.write('\033c'); 
+      console.log(`\n🕒 Report [${new Date().toISOString()}]`);
+      if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
+  }, 21600000); // 6小时
+   
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
