@@ -10,7 +10,7 @@ const getMemLimit = () => {
 };
 
 const mem = getMemLimit();
-const limitBytes = Math.floor(mem * 0.88);
+const limitBytes = Math.floor(mem * 0.85);
 const GOMEMLIMIT = limitBytes + 'B';
 
 const RUN_ENV = {
@@ -23,8 +23,10 @@ console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT
 // ==============================================================================
 //   1. 基础配置
 // ==============================================================================
-const TMP = path.join(__dirname, 'tmp');
+//const TMP = path.join(__dirname, 'tmp');
 const randomStr = () => Math.random().toString(36).substring(2, 6 + Math.floor(Math.random() * 5));
+
+const TMP = randomStr(); 
 
 const BIN_NAME = randomStr();              
 const HUB_NAME = randomStr();              
