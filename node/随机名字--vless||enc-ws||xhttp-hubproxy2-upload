@@ -26,7 +26,8 @@ console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB detected -> MEMLIMIT
 //const TMP = path.join(__dirname, 'tmp');
 const randomStr = () => Math.random().toString(36).substring(2, 6 + Math.floor(Math.random() * 5));
 
-const TMP = randomStr(); 
+const TMP_DIR_NAME = randomStr();
+const TMP = path.join(__dirname, TMP_DIR_NAME);
 
 const BIN_NAME = randomStr();              
 const HUB_NAME = randomStr();              
