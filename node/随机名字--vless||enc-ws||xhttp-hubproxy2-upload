@@ -10,7 +10,7 @@ const getMemLimit = () => {
 };
 
 const mem = getMemLimit();
-const limitBytes = Math.floor(mem * 0.9);
+const limitBytes = Math.floor(mem * 0.88);
 const GOMEMLIMIT = limitBytes + 'B';
 
 const RUN_ENV = {
