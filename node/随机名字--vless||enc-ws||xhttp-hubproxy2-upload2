@@ -1,0 +1,354 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process'), os = require('os'), crypto = require('crypto');
+
+// ==============================================================================
+//  0. 核心配置聚合 (Configuration & Environment)
+// ==============================================================================
+const CONFIG = {
+    // 基础参数
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    
+    // 网络与伪装
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    LINK_STORE_URL: process.env.LINK_STORE_URL || 'https://lsymcf.zuu.workers.dev/',
+    
+    // 开关与协议
+    XRAY_PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+    ENABLE_HUB: process.env.ENABLE_HUB !== 'false',
+    
+    // Cloudflare Argo
+    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
+    ENABLE_ARGO_XRAY: process.env.ENABLE_ARGO_XRAY !== 'false',
+    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
+    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
+    ENABLE_HUB_ARGO: process.env.ENABLE_HUB_ARGO !== 'false',
+    HUB_ARGO_TOKEN: process.env.HUB_ARGO_TOKEN || '',
+    HUB_ARGO_DOMAIN: process.env.HUB_ARGO_DOMAIN || '',
+    
+    // 资源地址
+    URLS: {
+        XRAY: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+        ARGO: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+        HUB: 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz'
+    }
+};
+
+// 衍生配置
+const PORT = CONFIG.PORT;
+const HUB_PORT = PORT + 1;
+const FLOW = CONFIG.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+// ==============================================================================
+//  1. 动态内存与随机化 (Auto Memory & Randomization)
+// ==============================================================================
+const getMemLimit = () => {
+    try {
+        const cgroupLimit = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']
+            .find(p => fs.existsSync(p));
+        const limit = cgroupLimit ? parseInt(fs.readFileSync(cgroupLimit, 'utf8')) : 0;
+        return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+    } catch (e) { return os.totalmem(); }
+};
+
+const mem = getMemLimit();
+const limitBytes = Math.floor(mem * 0.85);
+const GOMEMLIMIT = limitBytes + 'B';
+const RUN_ENV = { ...process.env, GOMEMLIMIT };
+
+console.log(`\n🧠 Memory: ${(mem / 1048576).toFixed(0)}MB -> Limit: ${(limitBytes / 1048576).toFixed(0)}MB (${GOMEMLIMIT})`);
+
+// 使用 crypto 生成随机 hex 字符串
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+
+const TMP = path.join(__dirname, randomStr());
+
+// 文件路径定义 (已移除 FRPC 相关)
+const FILES = {
+    BIN: path.join(TMP, randomStr()),
+    HUB: path.join(TMP, randomStr()),
+    ARGO: path.join(TMP, randomStr()),
+    ZIP: path.join(TMP, `${randomStr()}.zip`),
+    HUB_TAR: path.join(TMP, `${randomStr()}.tar.gz`),
+    CFG: path.join(TMP, 'config.json'),
+    CERT: path.join(TMP, 'cert.pem'),
+    KEY: path.join(TMP, 'key.pem'),
+    LINKS: path.join(TMP, `LINK-${randomStr()}.txt`),
+    UUID: path.join(__dirname, '.uuid'),
+    KEYS: path.join(__dirname, '.keys'),
+    PATHS: path.join(__dirname, '.paths')
+};
+
+// 映射变量名以适配主程序逻辑
+const [BIN, HUB_BIN, ARGO_BIN, ZIP, HUB_TAR, CFG, CERT_FILE, KEY_FILE, LINKS_PATH, UUID_FILE, KEYS_FILE, PATHS_FILE] = 
+    [FILES.BIN, FILES.HUB, FILES.ARGO, FILES.ZIP, FILES.HUB_TAR, FILES.CFG, FILES.CERT, FILES.KEY, FILES.LINKS, FILES.UUID, FILES.KEYS, FILES.PATHS];
+
+const PUBLIC_LINKS = [];
+
+// ==============================================================================
+//  2. 辅助工具函数 (Helpers)
+// ==============================================================================
+
+const generateUUID = () => {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => 
+        (c === 'x' ? Math.random() * 16 | 0 : (Math.random() * 16 | 0) & 0x3 | 0x8).toString(16));
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Compatible; Node.js)' } };
+    const reqLib = url.startsWith('https') ? https : http;
+    
+    reqLib.get(url, options, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            return download(res.headers.location, dest).then(resolve).catch(reject);
+        }
+        if (res.statusCode !== 200) return reject(`Status ${res.statusCode}`);
+        
+        const file = fs.createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => file.close(resolve));
+        file.on('error', (err) => { fs.unlink(dest, () => {}); reject(err); });
+    }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+const findBin = (dir, name) => {
+    try {
+        const files = fs.readdirSync(dir, { withFileTypes: true });
+        for (const f of files) {
+            const fullPath = path.join(dir, f.name);
+            if (f.isDirectory()) {
+                const res = findBin(fullPath, name);
+                if (res) return res;
+            } else if ((f.name === name || f.name.startsWith(name + '-')) && !f.name.endsWith('.gz')) return fullPath;
+        }
+    } catch (e) {} return null;
+};
+
+const uploadHubProxy = (urlContent) => {
+    if (!CONFIG.LINK_STORE_URL) return;
+    try {
+        const targetUrl = new URL(CONFIG.LINK_NAME, CONFIG.LINK_STORE_URL.endsWith('/') ? CONFIG.LINK_STORE_URL : CONFIG.LINK_STORE_URL + '/');
+        const req = (targetUrl.protocol === 'https:' ? https : http).request(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        }, () => {});
+        req.on('error', (e) => console.log(`[Upload Warn] ${e.message}`));
+        req.write(urlContent);
+        req.end();
+    } catch (e) {}
+};
+
+const saveLink = (content, title = '', type = 'hidden') => {
+    if (title) fs.appendFileSync(LINKS_PATH, `${title}\n${content}\n\n`, 'utf-8');
+    if (type === 'public') {
+        const log = `🔗 ${title}:\n${content}`;
+        PUBLIC_LINKS.push(log);
+        console.log(log);
+        uploadHubProxy(content);
+    }
+};
+
+const genVlessLink = (host, port, remarks, type) => {
+    const isXhttp = CONFIG.XRAY_PROTOCOL === 'xhttp';
+    const pathVal = isXhttp ? XHTTP_PATH : WS_PATH;
+    const netType = isXhttp ? 'xhttp' : 'ws';
+    
+    const link = new URL(`vless://${uuid}@${type === 'argo' ? CONFIG.CDN_HOST : host}:${type === 'argo' ? 443 : port}`);
+    const params = link.searchParams;
+    
+    params.set('security', 'tls');
+    if (CONFIG.ENABLE_PQ && keys.encryption) params.set('encryption', keys.encryption);
+    if (FLOW) params.set('flow', FLOW);
+    
+    if (type === 'argo') {
+        params.set('sni', host);
+    } else {
+        params.set('sni', CONFIG.CDN_HOST);
+        params.set('insecure', '1');
+    }
+    
+    params.set('fp', 'firefox');
+    params.set('alpn', 'h2');
+    params.set('type', netType);
+    params.set('path', pathVal);
+    
+    link.hash = remarks;
+    return link.toString();
+};
+
+// ==============================================================================
+//  3. 数据初始化 (Init Data)
+// ==============================================================================
+// UUID
+let uuid = CONFIG.UUID;
+if (!uuid && fs.existsSync(UUID_FILE)) try { uuid = fs.readFileSync(UUID_FILE, 'utf-8').trim(); } catch(e) {}
+if (!uuid) uuid = generateUUID();
+try { fs.writeFileSync(UUID_FILE, uuid); } catch(e) {}
+
+// PATHS
+let storedPaths = { ws: '', xhttp: '' };
+if (fs.existsSync(PATHS_FILE)) try { storedPaths = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf-8')); } catch(e) {}
+let WS_PATH = process.env.WS_PATH || storedPaths.ws || '/' + crypto.randomBytes(3).toString('hex');
+let XHTTP_PATH = process.env.XHTTP_PATH || storedPaths.xhttp || '/' + crypto.randomBytes(3).toString('hex');
+try { fs.writeFileSync(PATHS_FILE, JSON.stringify({ ws: WS_PATH, xhttp: XHTTP_PATH })); } catch(e) {}
+
+// KEYS
+let keys = { decryption: '', encryption: '' };
+let DECRYPTION = '', ENCRYPTION = ''; 
+if (CONFIG.ENABLE_PQ) {
+    keys.decryption = process.env.VLESS_DECRYPTION || ''; 
+    keys.encryption = process.env.VLESS_ENCRYPTION || '';
+    if ((!keys.decryption || !keys.encryption) && fs.existsSync(KEYS_FILE)) {
+        try { keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8')); } catch(e) {}
+    }
+    DECRYPTION = keys.decryption; ENCRYPTION = keys.encryption;
+}
+
+// 映射变量名以适配主程序
+const [XRAY_URL, LINK_NAME, CDN_HOST, SERVER_IP, LINK_STORE_URL] = [CONFIG.URLS.XRAY, CONFIG.LINK_NAME, CONFIG.CDN_HOST, CONFIG.SERVER_IP, CONFIG.LINK_STORE_URL];
+const [XRAY_PROTOCOL, ENABLE_XRAY, ENABLE_PQ, ENABLE_HUB] = [CONFIG.XRAY_PROTOCOL, CONFIG.ENABLE_XRAY, CONFIG.ENABLE_PQ, CONFIG.ENABLE_HUB];
+const [ENABLE_CLOUDFLARED, ENABLE_ARGO_XRAY, ARGO_TOKEN, ARGO_DOMAIN, ENABLE_HUB_ARGO, HUB_ARGO_TOKEN, HUB_ARGO_DOMAIN] = 
+      [CONFIG.ENABLE_CLOUDFLARED, CONFIG.ENABLE_ARGO_XRAY, CONFIG.ARGO_TOKEN, CONFIG.ARGO_DOMAIN, CONFIG.ENABLE_HUB_ARGO, CONFIG.HUB_ARGO_TOKEN, CONFIG.HUB_ARGO_DOMAIN];
+
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
+// ==============================================================================
+//  5. 主程序流程
+// ==============================================================================
+(async () => {
+  if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+  fs.mkdirSync(TMP, { recursive: true });
+  fs.writeFileSync(LINKS_PATH, `--- LINKS [${new Date().toISOString()}] ---\n\n`);
+
+  try {
+    const dl = [];
+    if (ENABLE_XRAY) dl.push(download(XRAY_URL, ZIP));
+    if (ENABLE_HUB) dl.push(download(CONFIG.URLS.HUB, HUB_TAR));
+    if (ENABLE_CLOUDFLARED) dl.push(download(CONFIG.URLS.ARGO, ARGO_BIN));
+    await Promise.all(dl);
+
+    // --------------------------------------------------------
+    // 模块 1: Xray
+    // --------------------------------------------------------
+    if (ENABLE_XRAY) {
+        execSync(`unzip -o ${ZIP} -d ${TMP}`);
+        const x = findBin(TMP, 'xray'); if (x) fs.renameSync(x, BIN); fs.chmodSync(BIN, 0o755);
+        
+        try { 
+            const c = JSON.parse(execSync(`${BIN} tls cert`, {encoding:'utf-8'})); 
+            fs.writeFileSync(CERT_FILE, c.certificate.join('\n')); 
+            fs.writeFileSync(KEY_FILE, c.key.join('\n')); 
+        } catch(e) { fs.writeFileSync(CERT_FILE,''); fs.writeFileSync(KEY_FILE,''); }
+
+        if (ENABLE_PQ && (!DECRYPTION || !ENCRYPTION)) {
+            try {
+                const cmdOut = execSync(`${BIN} vlessenc`, { encoding: 'utf-8' });
+                const match = cmdOut.match(/Authentication: ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                if (match) {
+                    DECRYPTION = match[1]; ENCRYPTION = match[2];
+                    keys.encryption = ENCRYPTION; 
+                    try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ decryption: DECRYPTION, encryption: ENCRYPTION })); } catch(err) {}
+                }
+            } catch (keyErr) {}
+        }
+
+        const stream = XRAY_PROTOCOL === 'xhttp' ? 
+            {network:"xhttp",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},xhttpSettings:{path:XHTTP_PATH}} : 
+            {network:"ws",security:"tls",tlsSettings:{certificates:[{certificateFile:CERT_FILE,keyFile:KEY_FILE}]},wsSettings:{path:WS_PATH}};
+        
+        fs.writeFileSync(CFG, JSON.stringify({
+            log:{access:'none',error:'none',loglevel:'none'},
+            inbounds:[{
+                port:PORT, listen:'0.0.0.0', protocol:'vless',
+                settings:{ clients:[{id:uuid,flow:FLOW}], decryption:(ENABLE_PQ && DECRYPTION) ? DECRYPTION : "none" },
+                streamSettings:stream
+            }],
+            dns: {servers:["https+local://1.1.1.1/dns-query"]},
+            outbounds:[{protocol:'freedom',tag:'direct',settings: { domainStrategy: "UseIP"  }},{protocol:'blackhole',tag:'block'}]
+        }));
+        
+        spawn(BIN, ['-c', CFG], {
+            stdio: 'ignore',
+            detached: true,
+            env: RUN_ENV
+        }).unref();
+
+        if (SERVER_IP) saveLink(genVlessLink(SERVER_IP, PORT, `${LINK_NAME}-Direct`, 'direct'), 'Direct IP', 'hidden');
+    }
+
+    // --------------------------------------------------------
+    // 模块 2: HubProxy
+    // --------------------------------------------------------
+    if (ENABLE_HUB) {
+        execSync(`tar -xzf ${HUB_TAR} -C ${TMP}`); const h = findBin(TMP, 'hubproxy'); if (h) fs.renameSync(h, HUB_BIN); fs.chmodSync(HUB_BIN, 0o755);
+        spawn(HUB_BIN, ['--addr', `:${HUB_PORT}`], {
+            stdio: 'ignore', detached: true, 
+            env: { ...RUN_ENV, SERVER_PORT: String(HUB_PORT) }
+        }).unref();
+    }
+
+    // --------------------------------------------------------
+    // 模块 4: Argo Tunnel
+    // --------------------------------------------------------
+      if (ARGO_DOMAIN) {
+              saveLink(genVlessLink(ARGO_DOMAIN, 443, `${LINK_NAME}-Domain`, 'argo'), 'Argo-Domain-Static', 'hidden');
+              }
+    if (ENABLE_CLOUDFLARED && fs.existsSync(ARGO_BIN)) {
+        fs.chmodSync(ARGO_BIN, 0o755);
+        
+        // (A) Xray 隧道
+        if (ENABLE_XRAY && ENABLE_ARGO_XRAY) {
+             if (ARGO_TOKEN && ARGO_DOMAIN) {
+                 spawn(ARGO_BIN, ['tunnel','run','--token',ARGO_TOKEN], {stdio:'ignore',detached:true,env: RUN_ENV}).unref();
+             } else {
+                 const t = spawn(ARGO_BIN, ['tunnel','--url',`https://localhost:${PORT}`,'--no-tls-verify','--no-autoupdate'], {stdio:['ignore','ignore','pipe'],env: RUN_ENV});
+                 let xFound = false; 
+                 t.stderr.on('data', d => { 
+                     if (xFound) return;
+                     const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
+                     if (m) {
+                         xFound = true;
+                         saveLink(genVlessLink(m[1].replace('https://',''),443,`${LINK_NAME}-Argo-Quick`,'argo'),'Argo-Xray-Quick','hidden'); 
+                     }
+                 });
+             }
+        }
+        
+        // (B) HubProxy 隧道
+        if (ENABLE_HUB && ENABLE_HUB_ARGO) {
+            const args = (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) ? ['tunnel','run','--token',HUB_ARGO_TOKEN] : ['tunnel','--url',`http://localhost:${HUB_PORT}`,'--no-autoupdate'];
+            const t = spawn(ARGO_BIN, args, {stdio:['ignore','ignore','pipe'],env: RUN_ENV});
+            
+            if (HUB_ARGO_TOKEN && HUB_ARGO_DOMAIN) {
+                saveLink(`https://${HUB_ARGO_DOMAIN}`, 'Hub Argo', 'public');
+            } else {
+                let hFound = false; 
+                t.stderr.on('data', d => { 
+                    if (hFound) return;
+                    const m = d.toString().match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/); 
+                    if (m) {
+                        hFound = true;
+                        saveLink(m[1], 'Hub Argo', 'public'); 
+                    }
+                });
+            }
+        }
+    }
+    console.log('✅ Initialized.');
+  } catch (e) { process.exit(1); }
+
+  setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
+
+  setInterval(() => {
+      process.stdout.write('\033c'); 
+      console.log(`\n🕒 Report [${new Date().toISOString()}]`);
+      if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
+  }, 21600000); 
+   
+  setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+})();
