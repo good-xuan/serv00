@@ -63,8 +63,8 @@ const TMP = path.join(__dirname, 'tmp');
 const randomStr = () => crypto.randomBytes(4).toString('hex'); // 优化：更快的随机串
 
 const FILES = {
-    BIN: path.join(TMP, `x-${randomStr()}`),
-    ARGO: path.join(TMP, `a-${randomStr()}`),
+    BIN: path.join(TMP, `${randomStr()}`),
+    ARGO: path.join(TMP, `${randomStr()}`),
     ZIP: path.join(TMP, `${randomStr()}.zip`),
     CFG: path.join(TMP, 'config.json'),
     CERT: path.join(TMP, 'cert.pem'),
