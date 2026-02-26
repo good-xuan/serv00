@@ -282,9 +282,9 @@ process.on('SIGTERM', () => { process.exit(0); });
     setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
 
     setInterval(() => {
-        // process.stdout.write('\033c'); // 可选：清屏可能影响容器日志查看，建议注释掉或保留
+        process.stdout.write('\033c'); // 可选：清屏可能影响容器日志查看，建议注释掉或保留
         console.log(`\n🕒 Report [${new Date().toISOString()}]`);
-        if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
+        //if (PUBLIC_LINKS.length > 0) PUBLIC_LINKS.forEach(l => console.log(l));
     }, 21600000);
 
     setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
