@@ -22,8 +22,8 @@ const CONFIG = {
     ARGO_TOKEN: process.env.ARGO_TOKEN || '',
     ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
     ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
-    
-    // 整合后的持久化文件
+
+    // 整合持久化文件，放在主目录下
     PERSIST_FILE: path.join(__dirname, '.sys_data') 
 };
 
@@ -45,11 +45,10 @@ const StateManager = {
     save(fields) {
         try {
             this.data = { ...this.data, ...fields };
-            // 先写临时文件再重命名，确保原子性
             const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
-            fs.writeFileSync(tmpFile, JSON.stringify(this.data, null, 2));
+            fs.writeFileSync(tmpFile, JSON.stringify(this.data));
             fs.renameSync(tmpFile, CONFIG.PERSIST_FILE);
-        } catch (e) { console.error("State save error:", e); }
+        } catch (e) {}
     }
 };
 
@@ -95,11 +94,10 @@ const download = (url, dest) => new Promise((resolve, reject) => {
 // ==============================================================================
 const state = StateManager.load();
 
-// UUID 逻辑
+// UUID & Path 逻辑
 const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
 if (uuid !== state.uuid) StateManager.save({ uuid });
 
-// 路径逻辑
 const PATH_CONFIG = {
     ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
     xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
@@ -114,15 +112,21 @@ let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encry
 const genVlessLink = (host, port, remarks, type) => {
     const isXhttp = CONFIG.PROTOCOL === 'xhttp';
     const pathVal = isXhttp ? PATH_CONFIG.xhttp : PATH_CONFIG.ws;
+    const netType = isXhttp ? 'xhttp' : 'ws';
+    
     const link = new URL(`vless://${uuid}@${type === 'argo' ? CONFIG.CDN_HOST : host}:${type === 'argo' ? 443 : port}`);
-    const p = link.searchParams;
-    p.set('security', 'tls');
-    if (CONFIG.ENABLE_PQ && keys.encryption) p.set('encryption', keys.encryption);
-    if (CONFIG.FLOW) p.set('flow', CONFIG.FLOW);
-    if (type === 'argo') p.set('sni', host); else { p.set('sni', CONFIG.CDN_HOST); p.set('insecure', '1'); }
-    p.set('fp', 'firefox'); p.set('alpn', 'h2'); p.set('type', isXhttp ? 'xhttp' : 'ws'); p.set('path', pathVal);
+    const params = link.searchParams;
+    params.set('security', 'tls');
+    if (CONFIG.ENABLE_PQ && keys.encryption) params.set('encryption', keys.encryption);
+    if (CONFIG.FLOW) params.set('flow', CONFIG.FLOW);
+    if (type === 'argo') { params.set('sni', host); } else { params.set('sni', CONFIG.CDN_HOST); params.set('insecure', '1'); }
+    params.set('fp', 'firefox'); params.set('alpn', 'h2'); params.set('type', netType); params.set('path', pathVal);
     link.hash = remarks;
     return link.toString();
+};
+
+const saveLink = (content, title = '') => {
+    try { fs.appendFileSync(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch(e) {}
 };
 
 const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => {
@@ -149,14 +153,12 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             const x = execSync(`find ${TMP} -type f -name "xray" | head -n 1`).toString().trim();
             fs.renameSync(x, FILES.BIN); fs.chmodSync(FILES.BIN, 0o755);
 
-            // 生成自签名证书
             try { 
                 const certData = JSON.parse(execSync(`${FILES.BIN} tls cert`, { encoding: 'utf-8' })); 
                 fs.writeFileSync(FILES.CERT, certData.certificate.join('\n')); 
                 fs.writeFileSync(FILES.KEY, certData.key.join('\n')); 
             } catch (e) {}
 
-            // PQ 密钥生成与持久化
             if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
                 try {
                     const cmdOut = execSync(`${FILES.BIN} vlessenc`, { encoding: 'utf-8' });
@@ -168,7 +170,6 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
                 } catch (e) {}
             }
 
-            // 写入 Xray 配置
             const stream = CONFIG.PROTOCOL === 'xhttp' ? 
                 { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
                 { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, wsSettings: { path: PATH_CONFIG.ws } };
@@ -180,25 +181,33 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             }));
             
             guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
-            console.log(`🔗 Direct: ${genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, 'Direct')}`);
+            if (CONFIG.SERVER_IP) saveLink(genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-Direct`, 'direct'), 'Direct IP');
         }
 
-        // Argo 启动
         if (CONFIG.ENABLE_CLOUDFLARED && fs.existsSync(FILES.ARGO)) {
             fs.chmodSync(FILES.ARGO, 0o755);
+            if (CONFIG.ARGO_DOMAIN) saveLink(genVlessLink(CONFIG.ARGO_DOMAIN, 443, `${CONFIG.LINK_NAME}-Domain`, 'argo'), 'Argo-Domain');
+
             if (CONFIG.ARGO_TOKEN) {
                 guardProcess('Argo', FILES.ARGO, ['tunnel', 'run', '--token', CONFIG.ARGO_TOKEN]);
             } else {
                 guardProcess('Argo-Q', FILES.ARGO, ['tunnel', '--url', `https://localhost:${CONFIG.PORT}`, '--no-tls-verify'], ['ignore', 'ignore', 'pipe'], (child) => {
                     child.stderr.on('data', d => {
                         const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
-                        if (m) console.log(`🔗 Argo: ${genVlessLink(m[1].replace('https://', ''), 443, 'Argo')}`);
+                        if (m) saveLink(genVlessLink(m[1].replace('https://', ''), 443, `${CONFIG.LINK_NAME}-Argo-Quick`, 'argo'), 'Argo-Quick');
                     });
                 });
             }
         }
+        console.log('✅ Initialized.');
     } catch (e) { process.exit(1); }
 
-    setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 20000);
-    setInterval(() => console.log('💓 Heartbeat', new Date().toLocaleTimeString()), 3600000);
+    // --- 彻底清理逻辑 ---
+    setTimeout(() => { 
+        if (fs.existsSync(TMP)) {
+            try { fs.rmSync(TMP, { recursive: true, force: true }); } catch(e) {}
+        }
+    }, 20000);
+    
+    setInterval(() => console.log('💓 Heartbeat', new Date().toISOString()), 3600000);
 })();
