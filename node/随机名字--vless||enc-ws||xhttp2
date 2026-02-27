@@ -214,6 +214,5 @@ process.on('SIGTERM', () => process.exit(0));
     setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 30000);
 
     // ✅ 优化：纯净的报告函数，只输出时间证明存活
-    setInterval(() => console.log(`\n🕒 Report [${new Date().toISOString()}]`), 21600000);
-    setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 300000);
+    setInterval(() => console.log('💗 Keep alive', new Date().toISOString()), 3600000);
 })();
