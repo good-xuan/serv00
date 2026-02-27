@@ -1,0 +1,204 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process'), os = require('os'), crypto = require('crypto');
+
+// ==============================================================================
+//  0. 核心配置聚合
+// ==============================================================================
+const CONFIG = {
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    
+    // Xray
+    XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+    PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+    
+    // Argo
+    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
+    ENABLE_ARGO_XRAY: process.env.ENABLE_ARGO_XRAY !== 'false',
+    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
+    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
+    ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+    
+    // 整合后的持久化文件
+    PERSIST_FILE: path.join(__dirname, '.sys_data') 
+};
+
+CONFIG.FLOW = CONFIG.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+// ==============================================================================
+//  1. 状态持久化管理 (State Management)
+// ==============================================================================
+const StateManager = {
+    data: {},
+    load() {
+        if (fs.existsSync(CONFIG.PERSIST_FILE)) {
+            try {
+                this.data = JSON.parse(fs.readFileSync(CONFIG.PERSIST_FILE, 'utf-8'));
+            } catch (e) { this.data = {}; }
+        }
+        return this.data;
+    },
+    save(fields) {
+        try {
+            this.data = { ...this.data, ...fields };
+            // 先写临时文件再重命名，确保原子性
+            const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
+            fs.writeFileSync(tmpFile, JSON.stringify(this.data, null, 2));
+            fs.renameSync(tmpFile, CONFIG.PERSIST_FILE);
+        } catch (e) { console.error("State save error:", e); }
+    }
+};
+
+// ==============================================================================
+//  2. 动态内存与工具函数
+// ==============================================================================
+const getMemLimit = () => {
+    try {
+        const cgroupLimit = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+        const limit = cgroupLimit ? parseInt(fs.readFileSync(cgroupLimit, 'utf8')) : 0;
+        return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+    } catch (e) { return os.totalmem(); }
+};
+
+const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(getMemLimit() * 0.85) + 'B' };
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+const TMP = path.join(__dirname, 'tmp');
+
+const FILES = {
+    BIN: path.join(TMP, `${randomStr()}`),
+    ARGO: path.join(TMP, `${randomStr()}`),
+    ZIP: path.join(TMP, `${randomStr()}.zip`),
+    CFG: path.join(TMP, 'config.json'),
+    CERT: path.join(TMP, 'cert.pem'),
+    KEY: path.join(TMP, 'key.pem'),
+    LINKS: path.join(TMP, `LINK-${randomStr()}.txt`)
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Compatible; Node.js)' } };
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, options, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) return download(res.headers.location, dest).then(resolve).catch(reject);
+        if (res.statusCode !== 200) return reject(`Status ${res.statusCode}`);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => file.close(resolve));
+    }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// ==============================================================================
+//  3. 业务逻辑初始化
+// ==============================================================================
+const state = StateManager.load();
+
+// UUID 逻辑
+const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
+if (uuid !== state.uuid) StateManager.save({ uuid });
+
+// 路径逻辑
+const PATH_CONFIG = {
+    ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
+    xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
+};
+if (PATH_CONFIG.ws !== state.ws || PATH_CONFIG.xhttp !== state.xhttp) {
+    StateManager.save({ ws: PATH_CONFIG.ws, xhttp: PATH_CONFIG.xhttp });
+}
+
+// 密钥逻辑 (PQ)
+let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
+
+const genVlessLink = (host, port, remarks, type) => {
+    const isXhttp = CONFIG.PROTOCOL === 'xhttp';
+    const pathVal = isXhttp ? PATH_CONFIG.xhttp : PATH_CONFIG.ws;
+    const link = new URL(`vless://${uuid}@${type === 'argo' ? CONFIG.CDN_HOST : host}:${type === 'argo' ? 443 : port}`);
+    const p = link.searchParams;
+    p.set('security', 'tls');
+    if (CONFIG.ENABLE_PQ && keys.encryption) p.set('encryption', keys.encryption);
+    if (CONFIG.FLOW) p.set('flow', CONFIG.FLOW);
+    if (type === 'argo') p.set('sni', host); else { p.set('sni', CONFIG.CDN_HOST); p.set('insecure', '1'); }
+    p.set('fp', 'firefox'); p.set('alpn', 'h2'); p.set('type', isXhttp ? 'xhttp' : 'ws'); p.set('path', pathVal);
+    link.hash = remarks;
+    return link.toString();
+};
+
+const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => {
+    const child = spawn(bin, args, { stdio: stdioMode, env: RUN_ENV });
+    if (onStart) onStart(child);
+    child.on('exit', () => process.exit(1));
+};
+
+// ==============================================================================
+//  4. 执行主流程
+// ==============================================================================
+(async () => {
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    fs.mkdirSync(TMP, { recursive: true });
+
+    try {
+        const dl = [];
+        if (CONFIG.ENABLE_XRAY) dl.push(download(CONFIG.XRAY_URL, FILES.ZIP));
+        if (CONFIG.ENABLE_CLOUDFLARED) dl.push(download(CONFIG.ARGO_URL, FILES.ARGO));
+        await Promise.all(dl);
+
+        if (CONFIG.ENABLE_XRAY) {
+            execSync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
+            const x = execSync(`find ${TMP} -type f -name "xray" | head -n 1`).toString().trim();
+            fs.renameSync(x, FILES.BIN); fs.chmodSync(FILES.BIN, 0o755);
+
+            // 生成自签名证书
+            try { 
+                const certData = JSON.parse(execSync(`${FILES.BIN} tls cert`, { encoding: 'utf-8' })); 
+                fs.writeFileSync(FILES.CERT, certData.certificate.join('\n')); 
+                fs.writeFileSync(FILES.KEY, certData.key.join('\n')); 
+            } catch (e) {}
+
+            // PQ 密钥生成与持久化
+            if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+                try {
+                    const cmdOut = execSync(`${FILES.BIN} vlessenc`, { encoding: 'utf-8' });
+                    const match = cmdOut.match(/"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                    if (match) { 
+                        keys = { decryption: match[1], encryption: match[2] }; 
+                        StateManager.save({ keys }); 
+                    }
+                } catch (e) {}
+            }
+
+            // 写入 Xray 配置
+            const stream = CONFIG.PROTOCOL === 'xhttp' ? 
+                { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, wsSettings: { path: PATH_CONFIG.ws } };
+
+            fs.writeFileSync(FILES.CFG, JSON.stringify({
+                log: { loglevel: 'none' },
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: CONFIG.FLOW }], decryption: (CONFIG.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" }, streamSettings: stream }],
+                outbounds: [{ protocol: 'freedom', tag: 'direct' }]
+            }));
+            
+            guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
+            console.log(`🔗 Direct: ${genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, 'Direct')}`);
+        }
+
+        // Argo 启动
+        if (CONFIG.ENABLE_CLOUDFLARED && fs.existsSync(FILES.ARGO)) {
+            fs.chmodSync(FILES.ARGO, 0o755);
+            if (CONFIG.ARGO_TOKEN) {
+                guardProcess('Argo', FILES.ARGO, ['tunnel', 'run', '--token', CONFIG.ARGO_TOKEN]);
+            } else {
+                guardProcess('Argo-Q', FILES.ARGO, ['tunnel', '--url', `https://localhost:${CONFIG.PORT}`, '--no-tls-verify'], ['ignore', 'ignore', 'pipe'], (child) => {
+                    child.stderr.on('data', d => {
+                        const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
+                        if (m) console.log(`🔗 Argo: ${genVlessLink(m[1].replace('https://', ''), 443, 'Argo')}`);
+                    });
+                });
+            }
+        }
+    } catch (e) { process.exit(1); }
+
+    setTimeout(() => { if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true }); }, 20000);
+    setInterval(() => console.log('💓 Heartbeat', new Date().toLocaleTimeString()), 3600000);
+})();
