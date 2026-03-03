@@ -1,0 +1,97 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process'), crypto = require('crypto'), os = require('os');
+
+// ==============================================================================
+// 1. 配置信息
+// ==============================================================================
+const CONFIG = {
+    PORT: String(process.env.HUB_PORT || process.env.PORT || 3000),
+    TOKEN: process.env.HUB_ARGO_TOKEN || '',
+    DOMAIN: process.env.HUB_ARGO_DOMAIN || '',
+    URLS: {
+        ARGO: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+        HUB: 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz'
+    }
+};
+
+const TMP_ROOT = path.join(os.tmpdir(), 'rt_' + crypto.randomBytes(4).toString('hex'));
+const FILES = { 
+    HUB_EXEC: path.join(TMP_ROOT, 'kworker'), 
+    ARGO_EXEC: path.join(TMP_ROOT, 'swapper'), 
+    TAR: path.join(TMP_ROOT, 'data.gz')
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const req = (url.startsWith('https') ? https : http).get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400) return download(res.headers.location, dest).then(resolve).catch(reject);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file).on('finish', () => { file.close(); resolve(); });
+    }).on('error', reject);
+});
+
+const findRealBin = (dir, nameKeyword) => {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        if (item.isDirectory()) {
+            const found = findRealBin(fullPath, nameKeyword);
+            if (found) return found;
+        } else if (item.name.includes(nameKeyword) && !item.name.endsWith('.gz') && !item.name.endsWith('.tar')) {
+            return fullPath;
+        }
+    }
+    return null;
+};
+
+// ==============================================================================
+// 2. 执行流程
+// ==============================================================================
+(async () => {
+    if (!fs.existsSync(TMP_ROOT)) fs.mkdirSync(TMP_ROOT, { recursive: true });
+
+    try {
+        // 静默下载与解压
+        await Promise.all([download(CONFIG.URLS.HUB, FILES.TAR), download(CONFIG.URLS.ARGO, FILES.ARGO_EXEC)]);
+        execSync(`tar -xzf ${FILES.TAR} -C ${TMP_ROOT}`);
+        
+        const realBinPath = findRealBin(TMP_ROOT, 'hubproxy');
+        if (!realBinPath) throw new Error('Binary missing');
+
+        fs.renameSync(realBinPath, FILES.HUB_EXEC);
+        fs.chmodSync(FILES.HUB_EXEC, 0o777); 
+        fs.chmodSync(FILES.ARGO_EXEC, 0o777);
+
+        // 启动 HubProxy (注入 SERVER_PORT)
+        const hubProc = spawn(FILES.HUB_EXEC, ['--addr', `:${CONFIG.PORT}`], { 
+            stdio: 'ignore', 
+            detached: true,
+            env: { ...process.env, SERVER_PORT: CONFIG.PORT } 
+        });
+        hubProc.on('error', e => console.error('❌ Service Error:', e.message));
+        hubProc.unref();
+
+        // 启动隧道
+        const args = CONFIG.TOKEN ? ['tunnel', 'run', '--token', CONFIG.TOKEN] : ['tunnel', '--url', `http://localhost:${CONFIG.PORT}`, '--no-autoupdate'];
+        const t = spawn(FILES.ARGO_EXEC, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+
+        // 只打印最终 URL
+        if (CONFIG.TOKEN && CONFIG.DOMAIN) {
+            console.log(`🔗 URL: https://${CONFIG.DOMAIN}`);
+        } else {
+            t.stderr.on('data', d => {
+                const match = d.toString().match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+                if (match) console.log(`🔗 URL: ${match[0]}`);
+            });
+        }
+
+    } catch (e) {
+        console.error('❌ Failed:', e.message);
+    }
+
+    // 15 秒后静默清理
+    setTimeout(() => { 
+        try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch (e) {} 
+    }, 15000);
+})();
+
+// 维持进程
+setInterval(() => {}, 1000 * 60 * 60);
