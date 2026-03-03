@@ -15,7 +15,13 @@ const CONFIG = {
     PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
     ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
     ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
-    
+
+    // Argo 资源
+    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
+    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
+    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
+    ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+
     // HubProxy 资源
     ENABLE_HUB: process.env.ENABLE_HUB !== 'false',
     HUB_URL: 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz',
@@ -23,11 +29,6 @@ const CONFIG = {
     HUB_ARGO_TOKEN: process.env.HUB_ARGO_TOKEN || '',
     HUB_ARGO_DOMAIN: process.env.HUB_ARGO_DOMAIN || '',
 
-    // Argo 资源
-    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
-    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
-    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
-    ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
 
     PERSIST_FILE: path.join(__dirname, '.sys_data') 
 };
