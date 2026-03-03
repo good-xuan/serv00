@@ -12,7 +12,7 @@ const CONFIG = {
     
     // Xray 资源
     XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
-    PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
+    PROTOCOL: process.env.XRAY_PROTOCOL || 'xhttp',
     ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
     ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
 
