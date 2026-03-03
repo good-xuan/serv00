@@ -1,0 +1,237 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process'), os = require('os'), crypto = require('crypto');
+
+// ==============================================================================
+//  0. 核心配置聚合
+// ==============================================================================
+const CONFIG = {
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    
+    // Xray 资源
+    XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+    PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+    
+    // HubProxy 资源
+    ENABLE_HUB: process.env.ENABLE_HUB !== 'false',
+    HUB_URL: 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz',
+    HUB_PORT: parseInt(process.env.HUB_PORT) || 3001,
+    HUB_ARGO_TOKEN: process.env.HUB_ARGO_TOKEN || '',
+    HUB_ARGO_DOMAIN: process.env.HUB_ARGO_DOMAIN || '',
+
+    // Argo 资源
+    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
+    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
+    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
+    ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+
+    PERSIST_FILE: path.join(__dirname, '.sys_data') 
+};
+
+CONFIG.FLOW = CONFIG.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+// ==============================================================================
+//  1. 状态持久化管理
+// ==============================================================================
+const StateManager = {
+    data: {},
+    load() {
+        if (fs.existsSync(CONFIG.PERSIST_FILE)) {
+            try { this.data = JSON.parse(fs.readFileSync(CONFIG.PERSIST_FILE, 'utf-8')); } catch (e) { this.data = {}; }
+        }
+        return this.data;
+    },
+    save(fields) {
+        try {
+            this.data = { ...this.data, ...fields };
+            fs.writeFileSync(CONFIG.PERSIST_FILE, JSON.stringify(this.data));
+        } catch (e) {}
+    }
+};
+
+// ==============================================================================
+//  2. 工具函数
+// ==============================================================================
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+const getMemLimit = () => {
+    try {
+        const cgroupLimit = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+        const limit = cgroupLimit ? parseInt(fs.readFileSync(cgroupLimit, 'utf8')) : 0;
+        return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+    } catch (e) { return os.totalmem(); }
+};
+
+const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(getMemLimit() * 0.85) + 'B' };
+
+// TMP 改在 index.js 当前目录下创建，并使用随机字符串
+const TMP = path.join(__dirname, randomStr());
+
+const FILES = {
+    BIN: path.join(TMP, randomStr()),
+    HUB: path.join(TMP, randomStr()),
+    ARGO: path.join(TMP, randomStr()),
+    ZIP: path.join(TMP, randomStr() + '.zip'),
+    HUB_TAR: path.join(TMP, randomStr() + '.tar.gz'),
+    CFG: path.join(TMP, 'config.json'),
+    CERT: path.join(TMP, 'cert.pem'),
+    KEY: path.join(TMP, 'key.pem'),
+    LINKS: path.join(TMP, `LINK-${randomStr()}.txt`)
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const options = { headers: { 'User-Agent': 'Mozilla/5.0' } };
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, options, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) return download(res.headers.location, dest).then(resolve).catch(reject);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file).on('finish', () => file.close(resolve));
+    }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+const findRealBin = (dir, nameKeyword) => {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        if (item.isDirectory()) {
+            const found = findRealBin(fullPath, nameKeyword);
+            if (found) return found;
+        } else if (item.name.includes(nameKeyword) && !item.name.endsWith('.gz') && !item.name.endsWith('.tar') && !item.name.endsWith('.zip')) {
+            return fullPath;
+        }
+    }
+    return null;
+};
+
+const genVlessLink = (host, port, remarks, type) => {
+    const isXhttp = CONFIG.PROTOCOL === 'xhttp';
+    const state = StateManager.load();
+    const pathVal = isXhttp ? state.xhttp : state.ws;
+    const link = new URL(`vless://${state.uuid}@${type === 'argo' ? CONFIG.CDN_HOST : host}:${type === 'argo' ? 443 : port}`);
+    const params = link.searchParams;
+    params.set('security', 'tls');
+    if (CONFIG.ENABLE_PQ && state.keys?.encryption) params.set('encryption', state.keys.encryption);
+    if (CONFIG.FLOW) params.set('flow', CONFIG.FLOW);
+    if (type === 'argo') { params.set('sni', host); } else { params.set('sni', CONFIG.CDN_HOST); params.set('insecure', '1'); }
+    params.set('fp', 'firefox'); params.set('alpn', 'h2'); params.set('type', isXhttp ? 'xhttp' : 'ws'); params.set('path', pathVal);
+    link.hash = remarks;
+    return link.toString();
+};
+
+const saveLink = (content, title = '') => {
+    try { fs.appendFileSync(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch(e) {}
+};
+
+const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null, customEnv = {}) => {
+    const child = spawn(bin, args, { stdio: stdioMode, env: { ...RUN_ENV, ...customEnv } });
+    if (onStart) onStart(child);
+    child.on('exit', () => process.exit(1));
+};
+
+// ==============================================================================
+//  3. 业务初始化与主逻辑
+// ==============================================================================
+(async () => {
+    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
+    fs.mkdirSync(TMP, { recursive: true });
+
+    const state = StateManager.load();
+    const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
+    if (uuid !== state.uuid) StateManager.save({ uuid });
+
+    const PATH_CONFIG = {
+        ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
+        xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
+    };
+    if (PATH_CONFIG.ws !== state.ws || PATH_CONFIG.xhttp !== state.xhttp) StateManager.save(PATH_CONFIG);
+
+    try {
+        const dl = [];
+        if (CONFIG.ENABLE_XRAY) dl.push(download(CONFIG.XRAY_URL, FILES.ZIP));
+        if (CONFIG.ENABLE_CLOUDFLARED) dl.push(download(CONFIG.ARGO_URL, FILES.ARGO));
+        if (CONFIG.ENABLE_HUB) dl.push(download(CONFIG.HUB_URL, FILES.HUB_TAR));
+        await Promise.all(dl);
+
+        // --- Xray 模块 ---
+        if (CONFIG.ENABLE_XRAY) {
+            try { execSync(`unzip -oj ${FILES.ZIP} "xray" -d ${TMP}`); } catch (e) { execSync(`unzip -o ${FILES.ZIP} xray -d ${TMP}`); }
+            fs.renameSync(path.join(TMP, 'xray'), FILES.BIN); fs.chmodSync(FILES.BIN, 0o755);
+
+            let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
+            if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+                try {
+                    const cmdOut = execSync(`${FILES.BIN} vlessenc`, { encoding: 'utf-8' });
+                    const match = cmdOut.match(/"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                    if (match) { keys = { decryption: match[1], encryption: match[2] }; StateManager.save({ keys }); }
+                } catch (e) {}
+            }
+
+            try { 
+                const certData = JSON.parse(execSync(`${FILES.BIN} tls cert`, { encoding: 'utf-8' })); 
+                fs.writeFileSync(FILES.CERT, certData.certificate.join('\n')); 
+                fs.writeFileSync(FILES.KEY, certData.key.join('\n')); 
+            } catch (e) {}
+
+            const stream = CONFIG.PROTOCOL === 'xhttp' ? 
+                { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, wsSettings: { path: PATH_CONFIG.ws } };
+
+            fs.writeFileSync(FILES.CFG, JSON.stringify({
+                log: { loglevel: 'none' },
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: CONFIG.FLOW }], decryption: (CONFIG.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" }, streamSettings: stream }],
+                outbounds: [{ protocol: 'freedom' }]
+            }));
+            guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
+            saveLink(genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-Direct`, 'direct'), 'Direct IP');
+        }
+
+        // --- HubProxy 模块 ---
+        if (CONFIG.ENABLE_HUB) {
+            execSync(`tar -xzf ${FILES.HUB_TAR} -C ${TMP}`);
+            const h = findRealBin(TMP, 'hubproxy');
+            fs.renameSync(h, FILES.HUB); fs.chmodSync(FILES.HUB, 0o755);
+            guardProcess('HubProxy', FILES.HUB, ['--addr', `:${CONFIG.HUB_PORT}`], 'ignore', null, { SERVER_PORT: String(CONFIG.HUB_PORT) });
+        }
+
+        // --- Argo 模块 (链接逻辑恢复) ---
+        if (CONFIG.ENABLE_CLOUDFLARED && fs.existsSync(FILES.ARGO)) {
+            fs.chmodSync(FILES.ARGO, 0o755);
+
+            // Xray 隧道 (静默)
+            if (CONFIG.ARGO_DOMAIN) saveLink(genVlessLink(CONFIG.ARGO_DOMAIN, 443, `${CONFIG.LINK_NAME}-Domain`, 'argo'), 'Argo-Domain');
+            const xArgs = CONFIG.ARGO_TOKEN ? ['tunnel', 'run', '--token', CONFIG.ARGO_TOKEN] : ['tunnel', '--url', `https://localhost:${CONFIG.PORT}`, '--no-tls-verify'];
+            guardProcess('Argo-X', FILES.ARGO, xArgs, ['ignore', 'ignore', 'pipe'], (child) => {
+                child.stderr.on('data', d => {
+                    const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
+                    if (m) saveLink(genVlessLink(m[1].replace('https://', ''), 443, `${CONFIG.LINK_NAME}-Argo-Quick`, 'argo'), 'Argo-Quick');
+                });
+            });
+
+            // HubProxy 隧道 (控制台显示)
+            if (CONFIG.ENABLE_HUB) {
+                if (CONFIG.HUB_ARGO_TOKEN) {
+                    guardProcess('Argo-H', FILES.ARGO, ['tunnel', 'run', '--token', CONFIG.HUB_ARGO_TOKEN]);
+                    if (CONFIG.HUB_ARGO_DOMAIN) console.log(`🔗 HubProxy URL: https://${CONFIG.HUB_ARGO_DOMAIN}`);
+                } else {
+                    guardProcess('Argo-H-Quick', FILES.ARGO, ['tunnel', '--url', `http://localhost:${CONFIG.HUB_PORT}`], ['ignore', 'ignore', 'pipe'], (child) => {
+                        child.stderr.on('data', d => {
+                            const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
+                            if (m) console.log(`🔗 HubProxy URL: ${m[0]}`);
+                        });
+                    });
+                }
+            }
+        }
+    } catch (e) {}
+
+    // 20秒物理清理
+    setTimeout(() => { 
+        if (fs.existsSync(TMP)) { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch(e) {} }
+    }, 20000);
+    
+    // 心跳保活
+    setInterval(() => console.log('💓 Heartbeat', new Date().toISOString()), 3600000);
+})();
