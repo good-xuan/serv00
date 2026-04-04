@@ -162,7 +162,8 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
                 try {
                     const cmdOut = execSync(`${FILES.BIN} vlessenc`, { encoding: 'utf-8' });
-                    const match = cmdOut.match(/"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                    const match = cmdOut.match(/ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+
                     if (match) { 
                         keys = { decryption: match[1], encryption: match[2] }; 
                         StateManager.save({ keys }); 
