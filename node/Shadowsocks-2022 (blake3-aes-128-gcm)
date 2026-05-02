@@ -162,10 +162,7 @@ const guardProcess = (name, bin, args) => {
 
     setTimeout(() => { 
         if (fs.existsSync(TMP)) {
-            try { 
-                // 保留 config 和 bin，清理 zip 和无用文件
-                fs.rmSync(FILES.ZIP, { force: true }); 
-            } catch(e) {}
+            try { fs.rmSync(TMP, { recursive: true, force: true }); } catch(e) {}
         }
     }, 20000);
     
