@@ -75,7 +75,7 @@ const FILES = {
     CFG: path.join(TMP, 'config.json'),
     CERT: path.join(TMP, 'cert.pem'),
     KEY: path.join(TMP, 'key.pem'),
-    LINKS: path.join(TMP, `LINK-${randomStr()}.txt`)
+    LINKS: path.join(__dirname,  `LINK.txt`)
 };
 
 const download = (url, dest) => new Promise((resolve, reject) => {
@@ -126,6 +126,8 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
     try { await fsPromises.access(TMP); await fsPromises.rm(TMP, { recursive: true, force: true }); } catch(e) {}
     await fsPromises.mkdir(TMP, { recursive: true });
 
+    try { await fsPromises.writeFile(FILES.LINKS, '', 'utf-8'); } catch(e) {}
+    
     try {
         const state = await StateManager.load();
 
