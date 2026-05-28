@@ -179,7 +179,7 @@ const guardProcess = (name, bin, args, runEnv) => {
                         network: "tcp,udp"
                     }
                 }],
-                dns: { servers: ["https+local://1.1.1.1/dns-query"] },
+                dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
                 outbounds: [
                     { protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, 
                     { protocol: 'blackhole', tag: 'block' }
