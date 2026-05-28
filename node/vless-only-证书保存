@@ -1,0 +1,253 @@
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const fsp = fs.promises;
+const path = require('path');
+const { spawn, exec } = require('child_process');
+const os = require('os');
+const crypto = require('crypto');
+const util = require('util');
+
+const execAsync = util.promisify(exec);
+
+// ==============================================================================
+//  0. 核心配置聚合
+// ==============================================================================
+const CONFIG = {
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    
+    // Xray 配置
+    XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+    PROTOCOL: process.env.XRAY_PROTOCOL || 'xhttp',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+    
+    CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN || '', 
+    PERSIST_FILE: path.join(__dirname, '.sys_data') 
+};
+
+CONFIG.FLOW = CONFIG.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+// 辅助函数：检查文件/文件夹是否存在（异步）
+const existsAsync = async (p) => {
+    try {
+        await fsp.access(p);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+// ==============================================================================
+//  1. 状态持久化管理 (异步版)
+// ==============================================================================
+const StateManager = {
+    data: {},
+    async load() {
+        if (await existsAsync(CONFIG.PERSIST_FILE)) {
+            try {
+                const content = await fsp.readFile(CONFIG.PERSIST_FILE, 'utf-8');
+                this.data = JSON.parse(content);
+            } catch (e) { this.data = {}; }
+        }
+        return this.data;
+    },
+    async save(fields) {
+        try {
+            this.data = { ...this.data, ...fields };
+            const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
+            await fsp.writeFile(tmpFile, JSON.stringify(this.data));
+            await fsp.rename(tmpFile, CONFIG.PERSIST_FILE);
+        } catch (e) {}
+    }
+};
+
+// ==============================================================================
+//  2. 动态环境与工具函数
+// ==============================================================================
+const getMemLimitAsync = async () => {
+    try {
+        const paths = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];
+        for (const p of paths) {
+            if (await existsAsync(p)) {
+                const content = await fsp.readFile(p, 'utf8');
+                const limit = parseInt(content);
+                return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+            }
+        }
+    } catch (e) {}
+    return os.totalmem();
+};
+
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+const TMP = path.join(__dirname, 'tmp');
+
+const FILES = {
+    BIN: path.join(TMP, `${randomStr()}`),
+    ZIP: path.join(TMP, `${randomStr()}.zip`),
+    CFG: path.join(TMP, 'config.json'),
+    LINKS: path.join(__dirname, 'LINK.txt') // 已去除 CERT 和 KEY 的临时文件依赖
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Compatible; Node.js)' } };
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, options, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            return download(res.headers.location, dest).then(resolve).catch(reject);
+        }
+        if (res.statusCode !== 200) return reject(`Status ${res.statusCode}`);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => file.close(resolve));
+    }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// ==============================================================================
+//  3. 核心业务与执行主流程 (全面异步)
+// ==============================================================================
+(async () => {
+    // 1. 清除旧的固定链接文件，防止重启时内容重复追加
+    if (await existsAsync(FILES.LINKS)) {
+        await fsp.unlink(FILES.LINKS).catch(() => {});
+    }
+
+    // 2. 准备系统内存限制与临时目录
+    const memLimit = await getMemLimitAsync();
+    const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(memLimit * 0.85) + 'B' };
+
+    if (await existsAsync(TMP)) await fsp.rm(TMP, { recursive: true, force: true }).catch(()=>{});
+    await fsp.mkdir(TMP, { recursive: true });
+
+    try {
+        // 3. 加载持久化状态
+        const state = await StateManager.load();
+        const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
+        if (uuid !== state.uuid) await StateManager.save({ uuid });
+
+        const PATH_CONFIG = {
+            ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
+            xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
+        };
+        if (PATH_CONFIG.ws !== state.ws || PATH_CONFIG.xhttp !== state.xhttp) {
+            await StateManager.save({ ws: PATH_CONFIG.ws, xhttp: PATH_CONFIG.xhttp });
+        }
+
+        let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
+
+        // 辅助：生成链接
+        const genVlessLink = (host, port, remarks, isDomainLink) => {
+            const isXhttp = CONFIG.PROTOCOL === 'xhttp';
+            const pathVal = isXhttp ? PATH_CONFIG.xhttp : PATH_CONFIG.ws;
+            const netType = isXhttp ? 'xhttp' : 'ws';
+            
+            const link = new URL(`vless://${uuid}@${isDomainLink ? CONFIG.CDN_HOST : host}:${isDomainLink ? 443 : port}`);
+            const params = link.searchParams;
+            params.set('security', 'tls');
+            if (CONFIG.ENABLE_PQ && keys.encryption) params.set('encryption', keys.encryption);
+            if (CONFIG.FLOW) params.set('flow', CONFIG.FLOW);
+            
+            if (isDomainLink) { 
+                params.set('sni', host); 
+            } else { 
+                params.set('sni', CONFIG.CDN_HOST); 
+                params.set('insecure', '1'); 
+            }
+            
+            params.set('fp', 'firefox'); 
+            params.set('alpn', 'h2'); 
+            params.set('type', netType); 
+            params.set('path', pathVal);
+            link.hash = remarks;
+            return link.toString();
+        };
+
+        // 辅助：异步保存链接内容
+        const saveLink = async (content, title = '') => {
+            try { await fsp.appendFile(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch(e) {}
+        };
+
+        // 4. Xray 核心流程
+        if (CONFIG.ENABLE_XRAY) {
+            await download(CONFIG.XRAY_URL, FILES.ZIP);
+            await execAsync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
+            
+            const { stdout: findOut } = await execAsync(`find ${TMP} -type f -name "xray" | head -n 1`);
+            const xrayPath = findOut.toString().trim();
+            await fsp.rename(xrayPath, FILES.BIN); 
+            await fsp.chmod(FILES.BIN, 0o755);
+
+            // 5. 证书生成与调用 (直接解析为数组，注入内存，不再写出 pem 实体文件)
+            let certArray = [], keyArray = [];
+            if (state.cert && state.key) {
+                // 如果本地已存在，直接切分成数组
+                certArray = state.cert.split('\n');
+                keyArray = state.key.split('\n');
+            } else {
+                try { 
+                    // 否则生成新证书
+                    const { stdout: certOut } = await execAsync(`${FILES.BIN} tls cert`, { encoding: 'utf-8' }); 
+                    const certData = JSON.parse(certOut); 
+                    certArray = certData.certificate;
+                    keyArray = certData.key;
+                    // 将证书保存到持久化配置 (.sys_data)
+                    await StateManager.save({ cert: certArray.join('\n'), key: keyArray.join('\n') });
+                } catch (e) {}
+            }
+
+            // 6. PQ 密钥
+            if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+                try {
+                    const { stdout: cmdOut } = await execAsync(`${FILES.BIN} vlessenc`, { encoding: 'utf-8' });
+                    const match = cmdOut.match(/ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                    if (match) { 
+                        keys = { decryption: match[1], encryption: match[2] }; 
+                        await StateManager.save({ keys }); 
+                    }
+                } catch (e) {}
+            }
+
+            // 【关键修改】：直接在配置中用 certificate/key 数组替代 certificateFile/keyFile 路径
+            const stream = CONFIG.PROTOCOL === 'xhttp' ? 
+                { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
+
+            await fsp.writeFile(FILES.CFG, JSON.stringify({
+                log: { loglevel: 'none' },
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: CONFIG.FLOW }], decryption: (CONFIG.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" }, streamSettings: stream }],
+                dns: { servers: ["https+local://1.1.1.1/dns-query"] },
+                outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, { protocol: 'blackhole', tag: 'block' }]
+            }));
+            
+            // 守护进程拉起
+            const child = spawn(FILES.BIN, ['-c', FILES.CFG], { stdio: 'ignore', env: RUN_ENV });
+            child.on('exit', () => process.exit(1));
+
+            // 7. 生成并保存链接
+            if (CONFIG.SERVER_IP) {
+                await saveLink(genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-Direct`, false), 'Direct IP');
+            }
+            if (CONFIG.CUSTOM_DOMAIN) {
+                await saveLink(genVlessLink(CONFIG.CUSTOM_DOMAIN, 443, `${CONFIG.LINK_NAME}`, true), 'Custom Domain');
+            }
+        }
+
+        console.log('✅ Initialized Async Mode.');
+    } catch (e) { 
+        console.error(e);
+        process.exit(1); 
+    }
+
+    // 延迟清理临时文件 (TMP 文件夹)
+    setTimeout(async () => { 
+        if (await existsAsync(TMP)) {
+            try { await fsp.rm(TMP, { recursive: true, force: true }); } catch(e) {}
+        }
+    }, 20000);
+    
+    setInterval(() => console.log('💓 Heartbeat', new Date().toISOString()), 3600000);
+})();
