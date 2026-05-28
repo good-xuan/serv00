@@ -187,7 +187,7 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             await fsPromises.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
                 inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: CONFIG.FLOW }], decryption: (CONFIG.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" }, streamSettings: stream }],
-                dns: { servers: ["https+local://1.1.1.1/dns-query","1.1.1.1"] },
+                dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
                 outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, { protocol: 'blackhole', tag: 'block' }]
             }));
             
