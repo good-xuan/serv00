@@ -1,0 +1,208 @@
+const http = require('http'), https = require('https'), fs = require('fs'), fsPromises = fs.promises, path = require('path'), { spawn, exec } = require('child_process'), os = require('os'), crypto = require('crypto'), util = require('util');
+
+const execAsync = util.promisify(exec); // 将 exec 转化为异步 Promise
+
+// ==============================================================================
+//  0. 核心配置聚合
+// ==============================================================================
+const CONFIG = {
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    
+    // Xray
+    XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+    PROTOCOL: process.env.XRAY_PROTOCOL || 'ws',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    
+    // Argo
+    ENABLE_CLOUDFLARED: process.env.ENABLE_CLOUDFLARED !== 'false',
+    ENABLE_ARGO_XRAY: process.env.ENABLE_ARGO_XRAY !== 'false',
+    ARGO_TOKEN: process.env.ARGO_TOKEN || '',
+    ARGO_DOMAIN: process.env.ARGO_DOMAIN || '',
+    ARGO_URL: 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64',
+
+    // 整合持久化文件，放在主目录下
+    PERSIST_FILE: path.join(__dirname, '.sys_data') 
+};
+
+// ==============================================================================
+//  1. 状态持久化管理 (State Management) - 异步化
+// ==============================================================================
+const StateManager = {
+    data: {},
+    async load() {
+        try {
+            await fsPromises.access(CONFIG.PERSIST_FILE);
+            this.data = JSON.parse(await fsPromises.readFile(CONFIG.PERSIST_FILE, 'utf-8'));
+        } catch (e) { this.data = {}; }
+        return this.data;
+    },
+    async save(fields) {
+        try {
+            this.data = { ...this.data, ...fields };
+            const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
+            await fsPromises.writeFile(tmpFile, JSON.stringify(this.data));
+            await fsPromises.rename(tmpFile, CONFIG.PERSIST_FILE);
+        } catch (e) {}
+    }
+};
+
+// ==============================================================================
+//  2. 动态内存与工具函数
+// ==============================================================================
+const getMemLimitSync = () => { // 仅在启动前获取一次，保持同步不影响主业务
+    try {
+        const cgroupLimit = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
+        const limit = cgroupLimit ? parseInt(fs.readFileSync(cgroupLimit, 'utf8')) : 0;
+        return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+    } catch (e) { return os.totalmem(); }
+};
+
+const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(getMemLimitSync() * 0.85) + 'B' };
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+const TMP = path.join(__dirname, 'tmp');
+
+const FILES = {
+    BIN: path.join(TMP, `${randomStr()}`),
+    ARGO: path.join(TMP, `${randomStr()}`),
+    ZIP: path.join(TMP, `${randomStr()}.zip`),
+    CFG: path.join(TMP, 'config.json'),
+    LINKS: path.join(__dirname,  `LINK.txt`)
+};
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Compatible; Node.js)' } };
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, options, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) return download(res.headers.location, dest).then(resolve).catch(reject);
+        if (res.statusCode !== 200) return reject(`Status ${res.statusCode}`);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => file.close(resolve));
+    }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
+});
+
+// ==============================================================================
+//  3. 业务逻辑辅助函数
+// ==============================================================================
+const genVlessLink = (host, port, remarks, type, uuid, pathConfig) => {
+    const isXhttp = CONFIG.PROTOCOL === 'xhttp';
+    const pathVal = isXhttp ? pathConfig.xhttp : pathConfig.ws;
+    const netType = isXhttp ? 'xhttp' : 'ws';
+    
+    const link = new URL(`vless://${uuid}@${type === 'argo' ? CONFIG.CDN_HOST : host}:${type === 'argo' ? 443 : port}`);
+    const params = link.searchParams;
+    
+    if (type === 'argo') { 
+        params.set('security', 'tls'); // Argo/Cloudflare 边缘节点提供 TLS
+        params.set('sni', host); 
+    } else { 
+        params.set('security', 'none'); // 直连回源无 TLS
+        params.set('sni', CONFIG.CDN_HOST);
+    }
+    
+    params.set('fp', 'firefox'); params.set('alpn', 'h2'); params.set('type', netType); params.set('path', pathVal);
+    link.hash = remarks;
+    return link.toString();
+};
+
+const saveLink = async (content, title = '') => { // 异步写入链接
+    try { await fsPromises.appendFile(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch(e) {}
+};
+
+const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => {
+    const child = spawn(bin, args, { stdio: stdioMode, env: RUN_ENV });
+    if (onStart) onStart(child);
+    child.on('exit', () => process.exit(1));
+};
+
+// ==============================================================================
+//  4. 执行主流程 (全异步改造)
+// ==============================================================================
+(async () => {
+    try { await fsPromises.access(TMP); await fsPromises.rm(TMP, { recursive: true, force: true }); } catch(e) {}
+    await fsPromises.mkdir(TMP, { recursive: true });
+
+    try { await fsPromises.writeFile(FILES.LINKS, '', 'utf-8'); } catch(e) {}
+    
+    try {
+        const state = await StateManager.load();
+
+        // UUID & Path 逻辑
+        const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
+        if (uuid !== state.uuid) await StateManager.save({ uuid });
+
+        const PATH_CONFIG = {
+            ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
+            xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
+        };
+        if (PATH_CONFIG.ws !== state.ws || PATH_CONFIG.xhttp !== state.xhttp) {
+            await StateManager.save({ ws: PATH_CONFIG.ws, xhttp: PATH_CONFIG.xhttp });
+        }
+
+        const dl = [];
+        if (CONFIG.ENABLE_XRAY) dl.push(download(CONFIG.XRAY_URL, FILES.ZIP));
+        if (CONFIG.ENABLE_CLOUDFLARED) dl.push(download(CONFIG.ARGO_URL, FILES.ARGO));
+        await Promise.all(dl);
+
+        if (CONFIG.ENABLE_XRAY) {
+            // 异步解压与查找
+            await execAsync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
+            const { stdout: findOut } = await execAsync(`find ${TMP} -type f -name "xray" | head -n 1`);
+            const x = findOut.toString().trim();
+            await fsPromises.rename(x, FILES.BIN); 
+            await fsPromises.chmod(FILES.BIN, 0o755);
+
+            // 无 TLS 配置
+            const stream = CONFIG.PROTOCOL === 'xhttp' ? 
+                { network: "xhttp", security: "none", xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { network: "ws", security: "none", wsSettings: { path: PATH_CONFIG.ws } };
+
+            // 异步写入配置
+            await fsPromises.writeFile(FILES.CFG, JSON.stringify({
+                log: { loglevel: 'none' },
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: "none" }, streamSettings: stream }],
+                dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
+                outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, { protocol: 'blackhole', tag: 'block' }]
+            }));
+            
+            guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
+            if (CONFIG.SERVER_IP) await saveLink(genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-Direct`, 'direct', uuid, PATH_CONFIG), 'Direct IP');
+        }
+
+        if (CONFIG.ENABLE_CLOUDFLARED) {
+            try {
+                await fsPromises.access(FILES.ARGO);
+                await fsPromises.chmod(FILES.ARGO, 0o755);
+                
+                if (CONFIG.ARGO_DOMAIN) await saveLink(genVlessLink(CONFIG.ARGO_DOMAIN, 443, `${CONFIG.LINK_NAME}-Domain`, 'argo', uuid, PATH_CONFIG), 'Argo-Domain');
+
+                if (CONFIG.ARGO_TOKEN) {
+                    guardProcess('Argo', FILES.ARGO, ['tunnel', 'run', '--token', CONFIG.ARGO_TOKEN]);
+                } else {
+                    // Xray 移除了证书，Argo 隧道应指向 http 而非 https
+                    guardProcess('Argo-Q', FILES.ARGO, ['tunnel', '--url', `http://localhost:${CONFIG.PORT}`, '--no-tls-verify'], ['ignore', 'ignore', 'pipe'], (child) => {
+                        child.stderr.on('data', async d => {
+                            const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
+                            if (m) await saveLink(genVlessLink(m[1].replace('https://', ''), 443, `${CONFIG.LINK_NAME}-Argo-Quick`, 'argo', uuid, PATH_CONFIG), 'Argo-Quick');
+                        });
+                    });
+                }
+            } catch(e) {} // 如果文件不存在或无权限
+        }
+        console.log('✅ Initialized.');
+    } catch (e) { process.exit(1); }
+
+    // --- 彻底清理逻辑 (异步) ---
+    setTimeout(async () => { 
+        try { 
+            await fsPromises.access(TMP);
+            await fsPromises.rm(TMP, { recursive: true, force: true }); 
+        } catch(e) {}
+    }, 20000);
+    
+    setInterval(() => console.log('💓 Heartbeat', new Date().toISOString()), 3600000);
+})();
