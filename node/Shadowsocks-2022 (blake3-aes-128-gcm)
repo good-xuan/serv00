@@ -1,4 +1,14 @@
-const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process'), os = require('os'), crypto = require('crypto');
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const fsPromises = fs.promises;
+const path = require('path');
+const { spawn, exec } = require('child_process');
+const util = require('util');
+const os = require('os');
+const crypto = require('crypto');
+
+const execAsync = util.promisify(exec);
 
 // ==============================================================================
 //  0. 核心配置聚合
@@ -20,40 +30,68 @@ const CONFIG = {
 };
 
 // ==============================================================================
-//  1. 状态持久化管理
+//  1. 异步工具函数 & 状态持久化管理
 // ==============================================================================
+const exists = async (filePath) => {
+    try {
+        await fsPromises.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 const StateManager = {
     data: {},
-    load() {
-        if (fs.existsSync(CONFIG.PERSIST_FILE)) {
+    async load() {
+        if (await exists(CONFIG.PERSIST_FILE)) {
             try {
-                this.data = JSON.parse(fs.readFileSync(CONFIG.PERSIST_FILE, 'utf-8'));
-            } catch (e) { this.data = {}; }
+                const content = await fsPromises.readFile(CONFIG.PERSIST_FILE, 'utf-8');
+                this.data = JSON.parse(content);
+            } catch (e) { 
+                this.data = {}; 
+            }
         }
         return this.data;
     },
-    save(fields) {
+    async save(fields) {
         try {
             this.data = { ...this.data, ...fields };
             const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
-            fs.writeFileSync(tmpFile, JSON.stringify(this.data));
-            fs.renameSync(tmpFile, CONFIG.PERSIST_FILE);
-        } catch (e) {}
+            await fsPromises.writeFile(tmpFile, JSON.stringify(this.data));
+            await fsPromises.rename(tmpFile, CONFIG.PERSIST_FILE);
+        } catch (e) {
+            console.error('保存状态失败:', e);
+        }
     }
 };
 
 // ==============================================================================
 //  2. 动态环境与工具函数
 // ==============================================================================
-const getMemLimit = () => {
+const getMemLimit = async () => {
     try {
-        const cgroupLimit = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'].find(p => fs.existsSync(p));
-        const limit = cgroupLimit ? parseInt(fs.readFileSync(cgroupLimit, 'utf8')) : 0;
-        return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
-    } catch (e) { return os.totalmem(); }
+        const paths = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];
+        let cgroupLimit = null;
+        
+        for (const p of paths) {
+            if (await exists(p)) {
+                cgroupLimit = p;
+                break;
+            }
+        }
+
+        if (cgroupLimit) {
+            const content = await fsPromises.readFile(cgroupLimit, 'utf8');
+            const limit = parseInt(content.trim());
+            return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
+        }
+        return os.totalmem();
+    } catch (e) { 
+        return os.totalmem(); 
+    }
 };
 
-const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(getMemLimit() * 0.85) + 'B' };
 const randomStr = () => crypto.randomBytes(4).toString('hex');
 const TMP = path.join(__dirname, 'tmp');
 
@@ -68,7 +106,9 @@ const download = (url, dest) => new Promise((resolve, reject) => {
     const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Compatible; Node.js)' } };
     const get = url.startsWith('https') ? https.get : http.get;
     get(url, options, res => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) return download(res.headers.location, dest).then(resolve).catch(reject);
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            return download(res.headers.location, dest).then(resolve).catch(reject);
+        }
         if (res.statusCode !== 200) return reject(`Status ${res.statusCode}`);
         const file = fs.createWriteStream(dest);
         res.pipe(file);
@@ -76,50 +116,59 @@ const download = (url, dest) => new Promise((resolve, reject) => {
     }).on('error', reject).setTimeout(30000, () => reject('Timeout'));
 });
 
-// ==============================================================================
-//  3. 核心业务初始化 (Shadowsocks)
-// ==============================================================================
-const state = StateManager.load();
-
-// 生成合规的 SS-2022 Base64 密码 (16字节用于 aes-128-gcm)
-let ssKey = state.ssKey;
-if (!ssKey) {
-    ssKey = crypto.randomBytes(16).toString('base64');
-    StateManager.save({ ssKey });
-}
-
 // 生成标准 SIP002 Shadowsocks 链接
-const genSSLink = (host, port, remarks) => {
+const genSSLink = (host, port, remarks, ssKey) => {
     // 格式: base64(method:password)
     const userInfo = Buffer.from(`${CONFIG.SS_METHOD}:${ssKey}`).toString('base64url');
     return `ss://${userInfo}@${host}:${port}#${encodeURIComponent(remarks)}`;
 };
 
-const saveLink = (content, title = '') => {
-    try { fs.appendFileSync(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch(e) {}
+const saveLink = async (content, title = '') => {
+    try { 
+        await fsPromises.appendFile(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); 
+    } catch(e) {}
 };
 
-const guardProcess = (name, bin, args) => {
-    const child = spawn(bin, args, { stdio: 'ignore', env: RUN_ENV });
+const guardProcess = (name, bin, args, runEnv) => {
+    const child = spawn(bin, args, { stdio: 'ignore', env: runEnv });
     child.on('exit', () => process.exit(1));
 };
 
 // ==============================================================================
-//  4. 执行主流程
+//  3. 执行主流程
 // ==============================================================================
 (async () => {
-    if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true, force: true });
-    fs.mkdirSync(TMP, { recursive: true });
+    // 异步初始化运行环境
+    const memLimit = await getMemLimit();
+    const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(memLimit * 0.85) + 'B' };
+
+    // 清理并重建临时目录
+    if (await exists(TMP)) {
+        await fsPromises.rm(TMP, { recursive: true, force: true });
+    }
+    await fsPromises.mkdir(TMP, { recursive: true });
 
     try {
+        // 异步加载状态并处理 SS Key
+        const state = await StateManager.load();
+        let ssKey = state.ssKey;
+        if (!ssKey) {
+            ssKey = crypto.randomBytes(16).toString('base64');
+            await StateManager.save({ ssKey });
+        }
+
         if (CONFIG.ENABLE_XRAY) {
             await download(CONFIG.XRAY_URL, FILES.ZIP);
-            execSync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
-            const x = execSync(`find ${TMP} -type f -name "xray" | head -n 1`).toString().trim();
-            fs.renameSync(x, FILES.BIN); fs.chmodSync(FILES.BIN, 0o755);
+            await execAsync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
+            
+            const { stdout } = await execAsync(`find ${TMP} -type f -name "xray" | head -n 1`);
+            const x = stdout.toString().trim();
+            
+            await fsPromises.rename(x, FILES.BIN);
+            await fsPromises.chmod(FILES.BIN, 0o755);
 
             // 写入 Shadowsocks Xray 配置
-            fs.writeFileSync(FILES.CFG, JSON.stringify({
+            await fsPromises.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
                 inbounds: [{
                     port: CONFIG.PORT,
@@ -137,19 +186,19 @@ const guardProcess = (name, bin, args) => {
                 ]
             }));
             
-            guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
+            guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG], RUN_ENV);
 
             // 1. 直连 IP 节点
             if (CONFIG.SERVER_IP) {
-                const ipLink = genSSLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-IP`);
-                saveLink(ipLink, 'Direct IP');
+                const ipLink = genSSLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-IP`, ssKey);
+                await saveLink(ipLink, 'Direct IP');
                 console.log(`\n🔗 IP 节点链接:\n${ipLink}`);
             }
             
             // 2. 自定义域名节点 (不经过 CDN，直接解析)
             if (CONFIG.CUSTOM_DOMAIN) {
-                const domainLink = genSSLink(CONFIG.CUSTOM_DOMAIN, CONFIG.PORT, `${CONFIG.LINK_NAME}-Domain`);
-                saveLink(domainLink, 'Custom Domain');
+                const domainLink = genSSLink(CONFIG.CUSTOM_DOMAIN, CONFIG.PORT, `${CONFIG.LINK_NAME}-Domain`, ssKey);
+                await saveLink(domainLink, 'Custom Domain');
                 console.log(`\n🔗 域名 节点链接:\n${domainLink}`);
             }
         }
@@ -160,9 +209,12 @@ const guardProcess = (name, bin, args) => {
         process.exit(1); 
     }
 
-    setTimeout(() => { 
-        if (fs.existsSync(TMP)) {
-            try { fs.rmSync(TMP, { recursive: true, force: true }); } catch(e) {}
+    // 延迟异步清理临时文件
+    setTimeout(async () => { 
+        if (await exists(TMP)) {
+            try { 
+                await fsPromises.rm(TMP, { recursive: true, force: true }); 
+            } catch(e) {}
         }
     }, 20000);
     
