@@ -184,7 +184,7 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
                     guardProcess('Argo', FILES.ARGO, ['tunnel', 'run', '--token', CONFIG.ARGO_TOKEN]);
                 } else {
                     // Xray 移除了证书，Argo 隧道应指向 http 而非 https
-                    guardProcess('Argo-Q', FILES.ARGO, ['tunnel', '--url', `http://localhost:${CONFIG.PORT}`, '--no-tls-verify'], ['ignore', 'ignore', 'pipe'], (child) => {
+                    guardProcess('Argo-Q', FILES.ARGO, ['tunnel', '--protocol' ,'http2' ,'--url', `http://localhost:${CONFIG.PORT}`, '--no-tls-verify'], ['ignore', 'ignore', 'pipe'], (child) => {
                         child.stderr.on('data', async d => {
                             const m = d.toString().match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
                             if (m) await saveLink(genVlessLink(m[1].replace('https://', ''), 443, `${CONFIG.LINK_NAME}-Argo-Quick`, 'argo', uuid, PATH_CONFIG), 'Argo-Quick');
