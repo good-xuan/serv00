@@ -164,9 +164,9 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             // 异步写入配置
             await fsPromises.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
-                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid }], decryption: "none" }, streamSettings: stream }],
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless',streamSettings: {sockopt: {tcpcongestion: "bbr"}},settings: { clients: [{ id: uuid }], decryption: "none" }, streamSettings: stream }],
                 dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
-                outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, { protocol: 'blackhole', tag: 'block' }]
+                outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" },streamSettings: {sockopt: {tcpcongestion: "bbr"}} }, { protocol: 'blackhole', tag: 'block' }]
             }));
             
             guardProcess('Xray', FILES.BIN, ['-c', FILES.CFG]);
