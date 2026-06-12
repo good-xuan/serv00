@@ -173,6 +173,7 @@ const guardProcess = (name, bin, args, runEnv) => {
                 inbounds: [{
                     port: CONFIG.PORT,
                     protocol: 'shadowsocks',
+                    streamSettings: {sockopt: {tcpcongestion: "bbr"}},
                     settings: {
                         method: CONFIG.SS_METHOD,
                         password: ssKey,
@@ -181,7 +182,7 @@ const guardProcess = (name, bin, args, runEnv) => {
                 }],
                 dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
                 outbounds: [
-                    { protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" } }, 
+                    { protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" },streamSettings: {sockopt: {tcpcongestion: "bbr"}} }, 
                     { protocol: 'blackhole', tag: 'block' }
                 ]
             }));
