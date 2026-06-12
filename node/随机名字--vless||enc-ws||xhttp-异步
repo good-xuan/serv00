@@ -180,8 +180,8 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
             }
 
             const stream = CONFIG.PROTOCOL === 'xhttp' ? 
-                { network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
-                { network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, wsSettings: { path: PATH_CONFIG.ws } };
+                { sockopt: {tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { sockopt: {tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { certificates: [{ certificateFile: FILES.CERT, keyFile: FILES.KEY }] }, wsSettings: { path: PATH_CONFIG.ws } };
 
             // 异步写入配置
             await fsPromises.writeFile(FILES.CFG, JSON.stringify({
