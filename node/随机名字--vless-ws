@@ -158,13 +158,13 @@ const guardProcess = (name, bin, args, stdioMode = 'ignore', onStart = null) => 
 
             // 无 TLS 配置
             const stream = CONFIG.PROTOCOL === 'xhttp' ? 
-                { network: "xhttp", security: "none", xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
-                { network: "ws", security: "none", wsSettings: { path: PATH_CONFIG.ws } };
+                { streamSettings: {sockopt: {tcpcongestion: "bbr"}},network: "xhttp", security: "none", xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { streamSettings: {sockopt: {tcpcongestion: "bbr"}},network: "ws", security: "none", wsSettings: { path: PATH_CONFIG.ws } };
 
             // 异步写入配置
             await fsPromises.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
-                inbounds: [{ port: CONFIG.PORT, protocol: 'vless',streamSettings: {sockopt: {tcpcongestion: "bbr"}},settings: { clients: [{ id: uuid }], decryption: "none" }, streamSettings: stream }],
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless',settings: { clients: [{ id: uuid }], decryption: "none" }, streamSettings: stream }],
                 dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
                 outbounds: [{ protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" },streamSettings: {sockopt: {tcpcongestion: "bbr"}} }, { protocol: 'blackhole', tag: 'block' }]
             }));
