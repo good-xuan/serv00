@@ -153,7 +153,7 @@ const guardProcess = (name, bin, args, runEnv) => {
         const state = await StateManager.load();
         let ssKey = state.ssKey;
         if (!ssKey) {
-            ssKey = crypto.randomBytes(16).toString('base64');
+            ssKey = crypto.randomBytes(24).toString('base64');
             await StateManager.save({ ssKey });
         }
 
