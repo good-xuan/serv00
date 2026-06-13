@@ -182,7 +182,7 @@ const guardProcess = (name, bin, args, runEnv) => {
                 }],
                 dns: { servers: ["https+local://1.1.1.1/dns-query","localhost"] },
                 outbounds: [
-                    { protocol: 'freedom', tag: 'direct', settings: { domainStrategy: "UseIP" },streamSettings: {sockopt: {tcpcongestion: "bbr"}} }, 
+                    { protocol: 'freedom', tag: 'direct', streamSettings: { sockopt: { domainStrategy: 'UseIP', happyEyeballs: { tryDelayMs: 250, prioritizeIPv6: false, interleave: 1, maxConcurrentTry: 4 }, tcpcongestion: 'bbr' } }  },
                     { protocol: 'blackhole', tag: 'block' }
                 ]
             }));
