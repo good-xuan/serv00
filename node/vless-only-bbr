@@ -213,8 +213,8 @@ const download = (url, dest) => new Promise((resolve, reject) => {
 
             // 【关键修改】：直接在配置中用 certificate/key 数组替代 certificateFile/keyFile 路径
             const stream = CONFIG.PROTOCOL === 'xhttp' ? 
-                { sockopt: {tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
-                { sockopt: {tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
+                { sockopt: {tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { sockopt: {tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
 
             await fsp.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
