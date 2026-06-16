@@ -4,7 +4,7 @@ const execAsync = util.promisify(exec);
 // ==============================================================================
 //  1. 最小化配置与随机变量定义
 // ==============================================================================
-const PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10),
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10),
 const UUID = crypto.randomUUID();                       // 每次启动随机生成，无需保存
 const WS_PATH = '/' + crypto.randomBytes(4).toString('hex'); // 随机 WebSocket 路径
 const LINK_NAME = process.env.LINK_NAME || 'Argo-Node';
