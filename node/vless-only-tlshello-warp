@@ -269,7 +269,7 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
                 { protocol: 'blackhole', tag: 'block' }
             );
 
-            // 🌟 如果成功获取到 wgkey，则添加 Warp 的 WireGuard 出站作为默认出站
+            // 🌟 如果成功获取到 wgkey，则特定域名走 Warp
             if (wgkey) {
               outbounds.push({
                 protocol: "wireguard",
