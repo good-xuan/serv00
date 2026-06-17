@@ -156,13 +156,13 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
         // 🌟 【新增逻辑】优先读取持久化的 Warp 密钥，没有则在线获取并保存
         let wgkey = state.wgkey || '';
         if (!wgkey) {
-            console.log('⏳ Fetching Cloudflare Warp Keys...');
+            console.log('⏳');
             wgkey = await getWgcfKeyAsync();
             if (wgkey) {
                 await StateManager.save({ wgkey });
-                console.log('🔑 Cloudflare Warp PrivateKey configuration synchronized.');
+                console.log('🔑');
             } else {
-                console.log('⚠️ Failed to fetch Warp Key, outbound will fall back to direct.');
+                console.log('⚠️');
             }
         }
 
@@ -289,7 +289,7 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
             routingRules.push({
               outboundTag: "warp",
               domain: ["google.com"]
-            }{
+            },{
               outboundTag: "direct",
               network: "tcp,udp"
             });
@@ -325,7 +325,7 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
             }
         }
 
-        console.log('✅ Initialized Async Mode with Warp Support.');
+        console.log('✅ Initialized Async Mode');
     } catch (e) { 
         console.error(e);
         process.exit(1); 
