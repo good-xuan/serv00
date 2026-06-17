@@ -400,7 +400,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
             }
           });
 
-          // 强制所有代理流量默认走 Warp
+          // 特定域名走 Warp
           routingRules.push({
             outboundTag: "warp",
             domain: ["google.com"]
