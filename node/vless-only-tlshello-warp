@@ -256,6 +256,19 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
             const outbounds = [];
             const routingRules = [];
 
+             // 基础出站（直连和阻止）
+            outbounds.push(
+                { 
+                    protocol: 'freedom', 
+                    tag: 'direct', 
+                    streamSettings: { 
+                        finalmask: { tcp: [{ type: "fragment", settings: { "packets": "tlshello", "length": "100-200", "delay": "10-20", "maxSplit": "3-6" } }] },
+                        sockopt: { tcpcongestion: 'bbr', domainStrategy: 'UseIP', happyEyeballs: { tryDelayMs: 250 } } 
+                    }  
+                }, 
+                { protocol: 'blackhole', tag: 'block' }
+            );
+
             // 🌟 如果成功获取到 wgkey，则添加 Warp 的 WireGuard 出站作为默认出站
             if (wgkey) {
                 outbounds.push({
@@ -280,18 +293,7 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
                 });
             }
 
-            // 基础出站（直连和阻止）
-            outbounds.push(
-                { 
-                    protocol: 'freedom', 
-                    tag: 'direct', 
-                    streamSettings: { 
-                        finalmask: { tcp: [{ type: "fragment", settings: { "packets": "tlshello", "length": "100-200", "delay": "10-20", "maxSplit": "3-6" } }] },
-                        sockopt: { tcpcongestion: 'bbr', domainStrategy: 'UseIP', happyEyeballs: { tryDelayMs: 250 } } 
-                    }  
-                }, 
-                { protocol: 'blackhole', tag: 'block' }
-            );
+
 
             // 写入配置文件
             await fsp.writeFile(FILES.CFG, JSON.stringify({
