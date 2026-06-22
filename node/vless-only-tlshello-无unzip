@@ -173,11 +173,10 @@ const download = (url, dest) => new Promise((resolve, reject) => {
 
         // 4. Xray 核心流程
         if (CONFIG.ENABLE_XRAY) {
-            console.log('⏳');
             await download(CONFIG.XRAY_URL, FILES.ZIP);
             
             // 【关键改造】：不用系统 unzip，动态调用纯 JS 解压库
-            console.log('⏳ Extracting package via AdmZip...');
+            console.log('⏳');
             try {
                 // 运行时动态安装 adm-zip 到临时位置，防止没有系统权限或没有 package.json
                 await execAsync('npm install adm-zip --no-save --legacy-peer-deps');
