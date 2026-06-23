@@ -249,8 +249,8 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
             }
 
             const stream = CONFIG.PROTOCOL === 'xhttp' ? 
-                { sockopt: {tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
-                { sockopt: {tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
+                { sockopt: {"trustedXForwardedFor": ["CF-Connecting-IP","X-Real-IP"],tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
+                { sockopt: {"trustedXForwardedFor": ["CF-Connecting-IP","X-Real-IP"],tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
 
             // 7. 动态构建出站 (Outbounds) 和路由规则 (Routing)
             const outbounds = [];
