@@ -1,7 +1,6 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 
 const AdmZip = require('adm-zip');
@@ -20,7 +19,6 @@ const CONFIG = {
     SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
     
     XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
-    PROTOCOL: process.env.XRAY_PROTOCOL || 'xhttp',
     ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
     ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
     
@@ -65,19 +63,6 @@ const StateManager = {
 // ==============================================================================
 //  2. 动态环境与工具函数
 // ==============================================================================
-const getMemLimitAsync = async () => {
-    try {
-        const paths = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];
-        for (const p of paths) {
-            if (await existsAsync(p)) {
-                const limit = parseInt(await fsp.readFile(p, 'utf8'));
-                return (limit > 0 && limit < 9e15) ? limit : os.totalmem();
-            }
-        }
-    } catch (e) {}
-    return os.totalmem();
-};
-
 const randomStr = () => crypto.randomBytes(4).toString('hex');
 const TMP = path.join(__dirname, 'tmp');
 
@@ -109,8 +94,8 @@ const downloadFile = async (url, dest) => {
 (async () => {
     if (await existsAsync(FILES.LINKS)) await fsp.unlink(FILES.LINKS).catch(() => {});
     
-    const memLimit = await getMemLimitAsync();
-    const RUN_ENV = { ...process.env, GOMEMLIMIT: Math.floor(memLimit * 0.85) + 'B' };
+    // 直接继承当前环境变量
+    const RUN_ENV = { ...process.env };
 
     if (await existsAsync(TMP)) await fsp.rm(TMP, { recursive: true, force: true }).catch(()=>{});
     await fsp.mkdir(TMP, { recursive: true });
@@ -120,21 +105,18 @@ const downloadFile = async (url, dest) => {
         const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
         if (uuid !== state.uuid) await StateManager.save({ uuid });
 
+        // 仅保留 xhttp 的路径配置
         const PATH_CONFIG = {
-            ws: process.env.WS_PATH || state.ws || '/' + randomStr(),
             xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
         };
-        if (PATH_CONFIG.ws !== state.ws || PATH_CONFIG.xhttp !== state.xhttp) {
-            await StateManager.save({ ws: PATH_CONFIG.ws, xhttp: PATH_CONFIG.xhttp });
+        if (PATH_CONFIG.xhttp !== state.xhttp) {
+            await StateManager.save({ xhttp: PATH_CONFIG.xhttp });
         }
 
         let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
 
+        // 简化的链接生成函数（仅 xhttp）
         const genVlessLink = (host, port, remarks, isDomainLink) => {
-            const isXhttp = CONFIG.PROTOCOL === 'xhttp';
-            const pathVal = isXhttp ? PATH_CONFIG.xhttp : PATH_CONFIG.ws;
-            const netType = isXhttp ? 'xhttp' : 'ws';
-            
             const link = new URL(`vless://${uuid}@${isDomainLink ? CONFIG.CDN_HOST : host}:${isDomainLink ? 443 : port}`);
             const params = link.searchParams;
             params.set('security', 'tls');
@@ -150,8 +132,8 @@ const downloadFile = async (url, dest) => {
             
             params.set('fp', 'firefox'); 
             params.set('alpn', 'h2'); 
-            params.set('type', netType); 
-            params.set('path', pathVal);
+            params.set('type', 'xhttp'); 
+            params.set('path', PATH_CONFIG.xhttp);
             link.hash = remarks;
             return link.toString();
         };
@@ -204,9 +186,17 @@ const downloadFile = async (url, dest) => {
                 }
             }
 
-            const stream = CONFIG.PROTOCOL === 'xhttp' ? 
-                { sockopt: {tcpcongestion: "bbr"},network: "xhttp", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, xhttpSettings: { path: PATH_CONFIG.xhttp } } : 
-                { sockopt: {tcpcongestion: "bbr"},network: "ws", security: "tls", tlsSettings: { minVersion: "1.3",certificates: [{ certificate: certArray, key: keyArray }] }, wsSettings: { path: PATH_CONFIG.ws } };
+            // 直接硬编码 xhttp 配置
+            const stream = { 
+                sockopt: {tcpcongestion: "bbr"},
+                network: "xhttp", 
+                security: "tls", 
+                tlsSettings: { 
+                    minVersion: "1.3",
+                    certificates: [{ certificate: certArray, key: keyArray }] 
+                }, 
+                xhttpSettings: { path: PATH_CONFIG.xhttp } 
+            };
 
             await fsp.writeFile(FILES.CFG, JSON.stringify({
                 log: { loglevel: 'none' },
