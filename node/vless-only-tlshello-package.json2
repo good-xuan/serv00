@@ -187,8 +187,8 @@ const downloadFile = async (url, dest) => {
             }
 
             // 直接硬编码 xhttp 配置
-            const stream = { 
-                sockopt: {tcpcongestion: "bbr"},
+            const stream = {
+                sockopt: {"trustedXForwardedFor": ["CF-Connecting-IP","X-Real-IP"],tcpcongestion: "bbr"},
                 network: "xhttp", 
                 security: "tls", 
                 tlsSettings: { 
