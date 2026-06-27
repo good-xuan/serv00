@@ -234,5 +234,5 @@ const downloadFile = async (url, dest) => {
         }
     }, 20000);
     
-    setInterval(() => console.log('💓'), 3600000); 
+    setInterval(() => console.log(new Date().toISOString(),'💓'), 3600000); 
 })();
