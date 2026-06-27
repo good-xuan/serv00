@@ -1,0 +1,58 @@
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), { spawn, execSync } = require('child_process');
+
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
+const HUB_URL = 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz';
+
+const TMP_DIR = path.join(__dirname, 'hub_tmp');
+const TAR_PATH = path.join(TMP_DIR, 'hubproxy.tar.gz');
+const FINAL_BIN = path.join(TMP_DIR, 'hubproxy_bin');
+
+const download = (url, dest) => new Promise((resolve, reject) => {
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) 
+            return download(res.headers.location, dest).then(resolve).catch(reject);
+        const file = fs.createWriteStream(dest);
+        res.pipe(file).on('finish', () => file.close(resolve));
+    }).on('error', reject);
+});
+
+const findRawBin = (dir) => {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        if (item.isDirectory()) {
+            const found = findRawBin(fullPath);
+            if (found) return found;
+        } else if (item.name === 'hubproxy' && !item.name.endsWith('.gz') && !item.name.endsWith('.tar')) {
+            return fullPath;
+        }
+    }
+    return null;
+};
+
+(async () => {
+    if (fs.existsSync(TMP_DIR)) fs.rmSync(TMP_DIR, { recursive: true, force: true });
+    fs.mkdirSync(TMP_DIR, { recursive: true });
+
+    try {
+        await download(HUB_URL, TAR_PATH);
+        execSync(`tar -xzf ${TAR_PATH} -C ${TMP_DIR}`);
+
+        const rawBinPath = findRawBin(TMP_DIR);
+        if (!rawBinPath) throw new Error('未找到解压后的原始文件');
+        
+        fs.renameSync(rawBinPath, FINAL_BIN);
+        fs.chmodSync(FINAL_BIN, 0o755);
+
+        const child = spawn('sh', ['-c', `exec "${FINAL_BIN}" --addr :${PORT}`], { 
+            stdio: 'inherit', 
+            env: { ...process.env, SERVER_PORT: String(PORT) } 
+        });
+
+        child.on('exit', () => process.exit(1));
+
+    } catch (e) {
+        console.error('❌ 运行失败:', e.message);
+    }
+})();
