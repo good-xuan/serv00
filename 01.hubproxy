@@ -2,10 +2,12 @@ const http = require('http'), https = require('https'), fs = require('fs'), path
 
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000);
 const HUB_URL = 'https://github.com/good-xuan/hubproxy/releases/download/v1.0.0/hubproxy-v1.0.0-linux-amd64.tar.gz';
+const CF_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
 
 const TMP_DIR = path.join(__dirname, 'hub_tmp');
 const TAR_PATH = path.join(TMP_DIR, 'hubproxy.tar.gz');
 const FINAL_BIN = path.join(TMP_DIR, 'hubproxy_bin');
+const CF_BIN = path.join(TMP_DIR, 'cloudflared_bin');
 
 const download = (url, dest) => new Promise((resolve, reject) => {
     const get = url.startsWith('https') ? https.get : http.get;
@@ -45,14 +47,40 @@ const findRawBin = (dir) => {
         fs.renameSync(rawBinPath, FINAL_BIN);
         fs.chmodSync(FINAL_BIN, 0o755);
 
-        const child = spawn('sh', ['-c', `exec "${FINAL_BIN}" --addr :${PORT}`], { 
-            stdio: 'inherit', 
+        await download(CF_URL, CF_BIN);
+        fs.chmodSync(CF_BIN, 0o755);
+
+        // 1. HubProxy 完全静音 (stdio: 'ignore')
+        const hubChild = spawn('sh', ['-c', `exec "${FINAL_BIN}" --addr :${PORT}`], { 
+            stdio: 'ignore', 
             env: { ...process.env, SERVER_PORT: String(PORT) } 
         });
 
-        child.on('exit', () => process.exit(1));
+        // 2. Cloudflared 捕获输出用来提取域名 (stdio: 'pipe')
+        const cfChild = spawn('sh', ['-c', `exec "${CF_BIN}" tunnel --url http://127.0.0.1:${PORT}`], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: process.env
+        });
+
+        // 提取域名的核心逻辑
+        const logFilter = (data) => {
+            const str = data.toString();
+            const match = str.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+            if (match) {
+                console.log('\n==================================================');
+                console.log(`🔗 Argo Tunnel 成功创建！公网访问地址: \x1b[36m${match[0]}\x1b[0m`);
+                console.log('==================================================\n');
+            }
+        };
+
+        cfChild.stdout.on('data', logFilter);
+        cfChild.stderr.on('data', logFilter); // cloudflared 的核心日志通常走 stderr
+
+        hubChild.on('exit', () => { cfChild.kill(); process.exit(1); });
+        cfChild.on('exit', () => { hubChild.kill(); process.exit(1); });
 
     } catch (e) {
+        // 仅保留最基础的初始化失败提示
         console.error('❌ 运行失败:', e.message);
     }
 })();
