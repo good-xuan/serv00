@@ -22,7 +22,7 @@ const CONFIG = {
     ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
     ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
     
-    CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN || '', 
+    CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN || '' || 'www.visa.com.sg',
     PERSIST_FILE: path.join(__dirname, '.sys_data') 
 };
 
