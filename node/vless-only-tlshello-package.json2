@@ -127,7 +127,6 @@ const downloadFile = async (url, dest) => {
                 params.set('sni', host); 
             } else { 
                 params.set('sni', CONFIG.CDN_HOST); 
-                params.set('insecure', '1'); 
             }
             
             params.set('fp', 'firefox'); 
