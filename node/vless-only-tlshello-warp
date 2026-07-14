@@ -197,7 +197,7 @@ const getWgcfKeyAsync = () => new Promise((resolve) => {
                 params.set('sni', CONFIG.CDN_HOST); 
             }
             
-            params.set('fp', 'firefox'); 
+            params.set('fp', 'random');  
             params.set('alpn', 'h2'); 
             params.set('type', netType); 
             params.set('path', pathVal);
