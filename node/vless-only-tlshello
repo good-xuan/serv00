@@ -157,7 +157,7 @@ const download = (url, dest) => new Promise((resolve, reject) => {
                 params.set('sni', CONFIG.CDN_HOST); 
             }
             
-            params.set('fp', 'firefox'); 
+            params.set('fp', 'random'); 
             params.set('alpn', 'h2'); 
             params.set('type', netType); 
             params.set('path', pathVal);
