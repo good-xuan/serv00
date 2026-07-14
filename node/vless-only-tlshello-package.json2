@@ -129,7 +129,7 @@ const downloadFile = async (url, dest) => {
                 params.set('sni', CONFIG.CDN_HOST); 
             }
             
-            params.set('fp', 'firefox'); 
+             params.set('fp', 'random'); 
             params.set('alpn', 'h2'); 
             params.set('type', 'xhttp'); 
             params.set('path', PATH_CONFIG.xhttp);
