@@ -5,10 +5,9 @@
 # ==============================================================================
 PORT="${SERVER_PORT:-${PORT:-3000}}"
 UUID="${UUID:-}"
-LINK_NAME="${LINK_NAME:-Alpine}"
+LINK_NAME="${LINK_NAME:-Node}"
 CDN_HOST="${CDN_HOST:-www.visa.com.sg}"
 SERVER_IP="${SERVER_IP:-127.0.0.1}"
-PROTOCOL="${XRAY_PROTOCOL:-xhttp}"
 ENABLE_XRAY="${ENABLE_XRAY:-true}"
 ENABLE_PQ="${ENABLE_PQ:-true}"
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-$CDN_HOST}"
@@ -46,39 +45,17 @@ download() {
     fi
 }
 
-# 异步探测系统内存
-get_mem_limit() {
-    local limit=""
-    if [ -f /sys/fs/cgroup/memory.max ]; then
-        limit=$(cat /sys/fs/cgroup/memory.max)
-    elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
-        limit=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)
-    fi
-
-    # 如果是无限制或未获取到，取宿主机最大内存 (KB转为Bytes)
-    if [ -z "$limit" ] || [ "$limit" = "max" ]; then
-        limit=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)
-    fi
-    echo "$limit"
-}
-
 # ==============================================================================
 #  2. 核心业务与执行主流程
 # ==============================================================================
 # 1. 清除旧的固定链接文件
 rm -f "$FILES_LINKS"
 
-# 2. 准备系统内存限制与临时目录
-MEM_LIMIT=$(get_mem_limit)
-# 通过 awk 处理大数乘法，防止 Shell 32位环境溢出，计算 85%
-GOMEMLIMIT=$(awk -v mem="$MEM_LIMIT" 'BEGIN { printf "%.0fB\n", mem * 0.85 }' 2>/dev/null || echo "256MB")
-export GOMEMLIMIT
-
+# 2. 准备临时目录
 rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR"
 
 # 3. 加载/初始化持久化状态
-# 检查/生成 UUID
 if [ -z "$UUID" ] && [ -f "$PERSIST_FILE.uuid" ]; then
     UUID=$(cat "$PERSIST_FILE.uuid")
 elif [ -z "$UUID" ]; then
@@ -86,19 +63,15 @@ elif [ -z "$UUID" ]; then
     echo "$UUID" > "$PERSIST_FILE.uuid"
 fi
 
-# 检查/生成 PATH
 if [ -f "$PERSIST_FILE.paths" ]; then
     . "$PERSIST_FILE.paths"
 else
-    PATH_WS="/$(random_str)"
     PATH_XHTTP="/$(random_str)"
-    echo "PATH_WS=\"$PATH_WS\"" > "$PERSIST_FILE.paths"
-    echo "PATH_XHTTP=\"$PATH_XHTTP\"" >> "$PERSIST_FILE.paths"
+    echo "PATH_XHTTP=\"$PATH_XHTTP\"" > "$PERSIST_FILE.paths"
 fi
-PATH_WS="${WS_PATH:-$PATH_WS}"
 PATH_XHTTP="${XHTTP_PATH:-$PATH_XHTTP}"
 
-# 辅助：生成链接
+# 辅助：生成链接 (仅限 xhttp)
 generate_vless_link() {
     local host_arg="$1"
     local port_arg="$2"
@@ -108,16 +81,8 @@ generate_vless_link() {
     local conn_host
     local conn_port
     local sni_val
-    local net_type
-    local path_val
-
-    if [ "$PROTOCOL" = "xhttp" ]; then
-        net_type="xhttp"
-        path_val="$PATH_XHTTP"
-    else
-        net_type="ws"
-        path_val="$PATH_WS"
-    fi
+    local net_type="xhttp"
+    local path_val="$PATH_XHTTP"
 
     if [ "$is_domain" = "true" ]; then
         conn_host="$CDN_HOST"
@@ -135,7 +100,6 @@ generate_vless_link() {
     local flow_param=""
     [ -n "$FLOW" ] && flow_param="&flow=${FLOW}"
 
-    # 对 Path 进行 URL 编码 ( / -> %2F )
     local encoded_path=$(echo "$path_val" | awk '{gsub(/\//,"%2F"); print}')
 
     echo "vless://${UUID}@${conn_host}:${conn_port}?security=tls${enc_param}${flow_param}&sni=${sni_val}&fp=random&alpn=h2&type=${net_type}&path=${encoded_path}#${remarks}"
@@ -161,7 +125,7 @@ if [ "$ENABLE_XRAY" != "false" ]; then
     mv "$XRAY_EXTRACTED" "$BIN_FILE"
     chmod 755 "$BIN_FILE"
 
-    # 5. 证书生成与调用 (直接依赖 `xray tls cert` 原生 JSON 格式)
+    # 5. 证书生成与调用
     if [ ! -f "$PERSIST_FILE.cert.json" ]; then
         "$BIN_FILE" tls cert > "$PERSIST_FILE.cert.json"
     fi
@@ -176,7 +140,6 @@ if [ "$ENABLE_XRAY" != "false" ]; then
             . "$PERSIST_FILE.pq"
         else
             "$BIN_FILE" vlessenc > "$TMP_DIR/pq_output.txt"
-            # 标记找到 "ML-KEM-768, Post-Quantum" 后，抓取遇到的第一个 decryption/encryption 并立刻退出
             PQ_DEC=$(awk -F'"' '/ML-KEM-768, Post-Quantum/{f=1} f && /"decryption":/{print $4; exit}' "$TMP_DIR/pq_output.txt")
             PQ_ENC=$(awk -F'"' '/ML-KEM-768, Post-Quantum/{f=1} f && /"encryption":/{print $4; exit}' "$TMP_DIR/pq_output.txt")
             
@@ -191,9 +154,8 @@ if [ "$ENABLE_XRAY" != "false" ]; then
         DECRYPTION_VAL="$PQ_DEC"
     fi
 
-    # 构建 StreamSettings
-    if [ "$PROTOCOL" = "xhttp" ]; then
-        STREAM_SETTINGS=$(cat <<EOF
+    # 构建 StreamSettings (仅 xhttp)
+    STREAM_SETTINGS=$(cat <<EOF
 {
     "sockopt": {"trustedXForwardedFor": ["CF-Connecting-IP","X-Real-IP"], "tcpcongestion": "bbr"},
     "network": "xhttp",
@@ -206,21 +168,6 @@ if [ "$ENABLE_XRAY" != "false" ]; then
 }
 EOF
 )
-    else
-        STREAM_SETTINGS=$(cat <<EOF
-{
-    "sockopt": {"trustedXForwardedFor": ["CF-Connecting-IP","X-Real-IP"], "tcpcongestion": "bbr"},
-    "network": "ws",
-    "security": "tls",
-    "tlsSettings": {
-        "minVersion": "1.3",
-        "certificates": [ $CERT_JSON_BLOCK ]
-    },
-    "wsSettings": { "path": "$PATH_WS" }
-}
-EOF
-)
-    fi
 
     # 写入 config.json 最终配置
     cat <<EOF > "$CFG_FILE"
@@ -265,5 +212,4 @@ EOF
     fi
 fi
 
-echo "✅ Initialized Async Mode (Alpine Shell)."
-
+echo "✅ Initialized Async Mode ( xhttp only)."
