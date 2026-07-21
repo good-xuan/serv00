@@ -5,12 +5,13 @@
 # ==============================================================================
 PORT="${SERVER_PORT:-${PORT:-3000}}"
 UUID="${UUID:-}"
-LINK_NAME="${LINK_NAME:-Node}"
+LINK_NAME="${LINK_NAME:-Alpine}"
 CDN_HOST="${CDN_HOST:-www.visa.com.sg}"
 SERVER_IP="${SERVER_IP:-127.0.0.1}"
 ENABLE_XRAY="${ENABLE_XRAY:-true}"
 ENABLE_PQ="${ENABLE_PQ:-true}"
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-$CDN_HOST}"
+DOWNLOAD_SNI="${DOWNLOAD_SNI:-cf.tencentapp.cn}"
 
 BASE_DIR="$(pwd)"
 PERSIST_FILE="$BASE_DIR/.sys_data"
@@ -131,7 +132,7 @@ if [ "$ENABLE_XRAY" != "false" ]; then
     fi
     CERT_JSON_BLOCK=$(cat "$PERSIST_FILE.cert.json")
 
-    # 6. PQ 密钥生成 (精确匹配 ML-KEM-768, Post-Quantum)
+    # 6. PQ 密钥生成
     PQ_DEC="$VLESS_DECRYPTION"
     PQ_ENC="$VLESS_ENCRYPTION"
 
@@ -207,9 +208,66 @@ EOF
     if [ -n "$SERVER_IP" ]; then
         save_link "$(generate_vless_link "$SERVER_IP" "$PORT" "${LINK_NAME}-Direct" "false")" "Direct IP"
     fi
+    
     if [ -n "$CUSTOM_DOMAIN" ]; then
         save_link "$(generate_vless_link "$CUSTOM_DOMAIN" "443" "${LINK_NAME}" "true")" "Custom Domain"
+        
+        # 附加 Extra JSON 配置模板
+        echo "=========================================" >> "$FILES_LINKS"
+        echo "Custom Domain Client Config Snippet (for clients supporting 'extra'):" >> "$FILES_LINKS"
+        cat <<EOF >> "$FILES_LINKS"
+{
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$CDN_HOST",
+            "port": 443,
+            "users": [
+              {
+                "id": "$UUID",
+                "encryption": "$PQ_ENC",
+                "flow": "$FLOW"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "$CUSTOM_DOMAIN",
+          "fingerprint": "random"
+        },
+        "xhttpSettings": {
+          "path": "$PATH_XHTTP"
+        }
+      },
+      "extra": {
+        "downloadSettings": {
+          "address": "$DOWNLOAD_SNI",
+          "port": 443,
+          "network": "xhttp",
+          "security": "tls",
+          "tlsSettings": {
+            "fingerprint": "random",
+            "serverName": "$CUSTOM_DOMAIN"
+          },
+          "xhttpSettings": {
+            "path": "$PATH_XHTTP"
+          }
+        }
+      }
+    }
+  ]
+}
+EOF
+        echo "=========================================" >> "$FILES_LINKS"
     fi
 fi
 
-echo "✅ Initialized Async Mode ( xhttp only)."
+echo "✅ Initialized Async Mode (Alpine Shell - xhttp only)."
