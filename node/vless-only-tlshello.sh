@@ -329,10 +329,6 @@ EOF
   {
     "rules": [
       {
-        "port": 53,
-        "outboundTag": "dns-out"
-      },
-      {
         "ip": ["223.5.5.5", "114.114.114.114"],
         "outboundTag": "direct"
       },
