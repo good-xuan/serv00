@@ -222,13 +222,21 @@ EOF
     "loglevel": "warning"
   },
   "inbounds": [
-
     {
       "port": 10808,
-      "protocol": "Socks",
+      "protocol": "socks",
       "settings":
       {
-        "auth": "noauth"
+        "udp": true
+      },
+      "sniffing":
+      {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
       },
       "tag": "socks-in"
     }
