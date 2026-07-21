@@ -5,7 +5,7 @@
 # ==============================================================================
 PORT="${SERVER_PORT:-${PORT:-3000}}"
 UUID="${UUID:-}"
-LINK_NAME="${LINK_NAME:-Alpine}"
+LINK_NAME="${LINK_NAME:-xhttp}"
 CDN_HOST="${CDN_HOST:-www.visa.com.sg}"
 SERVER_IP="${SERVER_IP:-127.0.0.1}"
 ENABLE_XRAY="${ENABLE_XRAY:-true}"
@@ -217,8 +217,35 @@ EOF
         echo "Custom Domain Client Config Snippet (for clients supporting 'extra'):" >> "$FILES_LINKS"
         cat <<EOF >> "$FILES_LINKS"
 {
+  "log":
+  {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+
+    {
+      "port": 10808,
+      "protocol": "Socks",
+      "settings":
+      {
+        "auth": "noauth"
+      },
+      "tag": "socks-in"
+    }
+  ],
   "outbounds": [
     {
+      "tag": "direct",
+      "protocol": "freedom",
+      "streamSettings":
+      {
+        "sockopt":
+        {
+          "tcpcongestion": "bbr",
+          "domainStrategy": "UseIPv4"
+        }
+      }
+    },    {
       "tag": "proxy",
       "protocol": "vless",
       "settings": {
@@ -262,12 +289,60 @@ EOF
           }
         }
       }
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "dns-out",
+      "protocol": "dns"
     }
-  ]
+  ],
+  "dns":
+  {
+    "queryStrategy": "UseIPv4",
+    "servers": [
+      {
+        "address": "223.5.5.5",
+        "port": 53,
+        "skipFallback": true,
+        "domains": ["geosite:cn"],
+        "expectIPs": ["geoip:cn"]
+      },
+      {
+        "skipFallback": true,
+        "address": "223.5.5.5",
+        "port": 53,
+        "domains": ["up.tuleap.cl","www.shopify.com","tore.ubi.com","www.visa.com.sg", "mfa.gov.ua", "cf.tencentapp.cn","www.visa.cn", "cf.877774.xyz"]
+      }, "1.1.1.1", "https+local://1.1.1.1/dns-query"]
+  },
+  "routing":
+  {
+    "rules": [
+      {
+        "port": 53,
+        "outboundTag": "dns-out"
+      },
+      {
+        "ip": ["223.5.5.5", "114.114.114.114"],
+        "outboundTag": "direct"
+      },
+      {
+        "domain": ["geosite:cn"],
+        "outboundTag": "direct"
+      },
+      {
+        "network": "tcp,udp",
+        "outboundTag": "proxy"
+      }
+    ]
+  }
 }
+
 EOF
         echo "=========================================" >> "$FILES_LINKS"
     fi
 fi
 
-echo "✅ Initialized Async Mode (Alpine Shell - xhttp only)."
+echo "✅ Initialized Async Mode ( xhttp only)."
