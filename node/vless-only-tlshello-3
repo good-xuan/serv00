@@ -1,0 +1,282 @@
+const fs = require('fs/promises');
+const { createWriteStream } = require('fs');
+const path = require('path');
+const { spawn, exec } = require('child_process');
+const crypto = require('crypto');
+const util = require('util');
+const zlib = require('zlib');
+const { pipeline } = require('stream/promises');
+
+const execAsync = util.promisify(exec);
+
+// ==============================================================================
+// 0. 核心配置聚合
+// ==============================================================================
+const CONFIG = {
+    PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+    UUID: process.env.UUID || '',
+    LINK_NAME: process.env.LINK_NAME || 'Node',
+    CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+    ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+    ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+    CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN || 'www.visa.com.sg',
+    PERSIST_FILE: path.join(__dirname, '.sys_data')
+};
+
+CONFIG.FLOW = CONFIG.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+const existsAsync = async (p) => fs.access(p).then(() => true).catch(() => false);
+
+// ==============================================================================
+// 1. 状态持久化管理
+// ==============================================================================
+const StateManager = {
+    data: {},
+    async load() {
+        if (await existsAsync(CONFIG.PERSIST_FILE)) {
+            try {
+                this.data = JSON.parse(await fs.readFile(CONFIG.PERSIST_FILE, 'utf-8'));
+            } catch (e) {
+                console.error('📦❌');
+                this.data = {};
+            }
+        }
+        return this.data;
+    },
+    async save(fields) {
+        try {
+            this.data = { ...this.data, ...fields };
+            const tmpFile = CONFIG.PERSIST_FILE + '.tmp';
+            await fs.writeFile(tmpFile, JSON.stringify(this.data));
+            await fs.rename(tmpFile, CONFIG.PERSIST_FILE);
+        } catch (e) {
+            console.error('💾❌');
+        }
+    }
+};
+
+// ==============================================================================
+// 2. 动态环境与工具函数
+// ==============================================================================
+const randomStr = () => crypto.randomBytes(4).toString('hex');
+const TMP = path.join(__dirname, 'tmp');
+
+const FILES = {
+    BIN: path.join(TMP, `${randomStr()}`),
+    ZIP: path.join(TMP, `${randomStr()}.zip`),
+    CFG: path.join(TMP, 'config.json'),
+    LINKS: path.join(__dirname, 'LINK.txt')
+};
+
+// 流式管道下载（低内存存盘）
+const downloadFile = async (url, dest) => {
+    const response = await fetch(url);
+    if (!response.ok || !response.body) throw new Error(`Download failed: ${response.statusText}`);
+    await pipeline(response.body, createWriteStream(dest));
+};
+
+// 检查某个系统 CLI 命令是否存在
+async function hasCommand(cmd) {
+    try {
+        await execAsync(`command -v ${cmd}`);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// 纯 Node.js (zlib) 提取 Zip 中的单文件 (零外部依赖兜底方案)
+async function extractWithZlib(zipPath, targetFileName, outputPath) {
+    const buffer = await fs.readFile(zipPath);
+    let offset = 0;
+
+    while (offset < buffer.length - 30) {
+        if (buffer.readUInt32LE(offset) === 0x04034b50) {
+            const compression = buffer.readUInt16LE(offset + 8);
+            const compressedSize = buffer.readUInt32LE(offset + 18);
+            const fileNameLen = buffer.readUInt16LE(offset + 26);
+            const extraLen = buffer.readUInt16LE(offset + 28);
+
+            const fileName = buffer.toString('utf8', offset + 30, offset + 30 + fileNameLen);
+            const dataOffset = offset + 30 + fileNameLen + extraLen;
+
+            if (fileName === targetFileName || fileName.endsWith('/' + targetFileName)) {
+                const compressedData = buffer.subarray(dataOffset, dataOffset + compressedSize);
+                const decompressedData = compression === 0 
+                    ? compressedData 
+                    : zlib.inflateRawSync(compressedData);
+
+                await fs.writeFile(outputPath, decompressedData);
+                return true;
+            }
+            offset = dataOffset + compressedSize;
+        } else {
+            offset++;
+        }
+    }
+    throw new Error(`File ${targetFileName} not found in zip archive.`);
+}
+
+// 智能多级降级解压流程：unzip -> tar -> 纯 Node.js zlib
+async function smartExtractZip(zipPath, destDir, targetBinaryName, finalBinPath) {
+    const hasUnzip = await hasCommand('unzip');
+    const hasTar = await hasCommand('tar');
+
+    if (hasUnzip) {
+        await execAsync(`unzip -o ${zipPath} -d ${destDir}`);
+        const { stdout } = await execAsync(`find ${destDir} -type f \\( -name "${targetBinaryName}" -o -name "${targetBinaryName}.exe" \\) | head -n 1`);
+        const extractedPath = stdout.trim();
+        if (!extractedPath) throw new Error("Binary not found after unzip");
+        await fs.rename(extractedPath, finalBinPath);
+
+    } else if (hasTar) {
+        await execAsync(`tar -xf ${zipPath} -C ${destDir}`);
+        const { stdout } = await execAsync(`find ${destDir} -type f \\( -name "${targetBinaryName}" -o -name "${targetBinaryName}.exe" \\) | head -n 1`);
+        const extractedPath = stdout.trim();
+        if (!extractedPath) throw new Error("Binary not found after tar");
+        await fs.rename(extractedPath, finalBinPath);
+
+    } else {
+        await extractWithZlib(zipPath, targetBinaryName, finalBinPath);
+    }
+
+    await fs.chmod(finalBinPath, 0o755);
+}
+
+// ==============================================================================
+// 3. 核心业务与执行主流程
+// ==============================================================================
+(async () => {
+    if (await existsAsync(FILES.LINKS)) await fs.unlink(FILES.LINKS).catch(() => {});
+
+    if (await existsAsync(TMP)) await fs.rm(TMP, { recursive: true, force: true }).catch(() => {});
+    await fs.mkdir(TMP, { recursive: true });
+
+    try {
+        const state = await StateManager.load();
+        const uuid = CONFIG.UUID || state.uuid || crypto.randomUUID();
+        if (uuid !== state.uuid) await StateManager.save({ uuid });
+
+        const PATH_CONFIG = {
+            xhttp: process.env.XHTTP_PATH || state.xhttp || '/' + randomStr()
+        };
+        if (PATH_CONFIG.xhttp !== state.xhttp) {
+            await StateManager.save({ xhttp: PATH_CONFIG.xhttp });
+        }
+
+        let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
+
+        // 节点链接生成函数
+        const genVlessLink = (host, port, remarks, isDomainLink) => {
+            const link = new URL(`vless://${uuid}@${isDomainLink ? CONFIG.CDN_HOST : host}:${isDomainLink ? 443 : port}`);
+            const params = link.searchParams;
+            params.set('security', 'tls');
+            if (CONFIG.ENABLE_PQ && keys.encryption) params.set('encryption', keys.encryption);
+            if (CONFIG.FLOW) params.set('flow', CONFIG.FLOW);
+
+            if (isDomainLink) {
+                params.set('sni', host);
+            } else {
+                params.set('sni', CONFIG.CDN_HOST);
+            }
+
+            params.set('fp', 'random');
+            params.set('alpn', 'h2');
+            params.set('type', 'xhttp');
+            params.set('path', PATH_CONFIG.xhttp);
+            link.hash = remarks;
+            return link.toString();
+        };
+
+        const saveLink = async (content, title = '') => {
+            try { await fs.appendFile(FILES.LINKS, `\n${title}\n${content}\n`, 'utf-8'); } catch (e) {}
+        };
+
+        if (CONFIG.ENABLE_XRAY) {
+            console.log('⏳');
+            await downloadFile(CONFIG.XRAY_URL, FILES.ZIP);
+
+            console.log('📦');
+            // 自动判断环境（unzip/tar/zlib）解压并提取 xray 文件
+            await smartExtractZip(FILES.ZIP, TMP, 'xray', FILES.BIN);
+
+            let certArray = [], keyArray = [];
+            if (state.cert && state.key) {
+                certArray = state.cert.split('\n');
+                keyArray = state.key.split('\n');
+            } else {
+                try {
+                    const { stdout: certOut } = await execAsync(`${FILES.BIN} tls cert`);
+                    const certData = JSON.parse(certOut);
+                    certArray = certData.certificate;
+                    keyArray = certData.key;
+                    await StateManager.save({ cert: certArray.join('\n'), key: keyArray.join('\n') });
+                } catch (e) {
+                    console.error('🔐❌');
+                }
+            }
+
+            if (CONFIG.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+                try {
+                    const { stdout: cmdOut } = await execAsync(`${FILES.BIN} vlessenc`);
+                    const match = cmdOut.match(/ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+                    if (match) {
+                        keys = { decryption: match[1], encryption: match[2] };
+                        await StateManager.save({ keys });
+                    }
+                } catch (e) {
+                    console.error('🔑❌');
+                }
+            }
+
+            const stream = {
+                sockopt: { "trustedXForwardedFor": ["CF-Connecting-IP", "X-Real-IP"], tcpcongestion: "bbr" },
+                network: "xhttp",
+                security: "tls",
+                tlsSettings: {
+                    minVersion: "1.3",
+                    certificates: [{ certificate: certArray, key: keyArray }]
+                },
+                xhttpSettings: { path: PATH_CONFIG.xhttp }
+            };
+
+            await fs.writeFile(FILES.CFG, JSON.stringify({
+                log: { loglevel: 'none' },
+                inbounds: [{ port: CONFIG.PORT, protocol: 'vless', settings: { clients: [{ id: uuid, flow: CONFIG.FLOW }], decryption: (CONFIG.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" }, streamSettings: stream }],
+                dns: { servers: ["https+local://1.1.1.1/dns-query", "localhost"] },
+                outbounds: [{ protocol: 'freedom', tag: 'direct', streamSettings: { finalmask: { tcp: [{ type: "fragment", settings: { "packets": "tlshello", "length": "100-200", "delay": "10-20", "maxSplit": "3-6" } }] }, sockopt: { tcpcongestion: 'bbr', domainStrategy: 'UseIP', happyEyeballs: { tryDelayMs: 250 } } } }, { protocol: 'blackhole', tag: 'block' }]
+            }));
+
+            console.log('🚀');
+            spawn(FILES.BIN, ['-c', FILES.CFG], {
+                env: process.env,
+                stdio: 'ignore'
+            }).on('exit', () => {
+                console.error('💀');
+                process.exit(1);
+            });
+
+            if (CONFIG.SERVER_IP) {
+                await saveLink(genVlessLink(CONFIG.SERVER_IP, CONFIG.PORT, `${CONFIG.LINK_NAME}-Direct`, false), 'Direct IP');
+            }
+            if (CONFIG.CUSTOM_DOMAIN) {
+                await saveLink(genVlessLink(CONFIG.CUSTOM_DOMAIN, 443, `${CONFIG.LINK_NAME}`, true), 'Custom Domain');
+            }
+        }
+
+        console.log('✅');
+    } catch (e) {
+        console.error('❌', e);
+        process.exit(1);
+    }
+
+    setTimeout(async () => {
+        if (await existsAsync(TMP)) {
+            try { await fs.rm(TMP, { recursive: true, force: true }); } catch (e) { console.error('🧹❌'); }
+        }
+    }, 20000);
+
+    setInterval(() => console.log(new Date().toISOString(), '💓'), 3600000);
+})();
