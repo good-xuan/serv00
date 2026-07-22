@@ -102,9 +102,9 @@ const getWgcfKeyAsync = async () => {
             wgkey = await getWgcfKeyAsync();
             if (wgkey) {
                 await State.save({ wgkey });
-                console.log('🔑 Warp key saved.');
+                console.log('🔑');
             } else {
-                console.log('⚠️ Failed to generate Warp key.');
+                console.log('⚠️');
             }
         }
 
