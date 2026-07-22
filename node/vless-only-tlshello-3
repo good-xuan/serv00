@@ -119,29 +119,27 @@ async function extractWithZlib(zipPath, targetFileName, outputPath) {
     throw new Error(`File ${targetFileName} not found in zip archive.`);
 }
 
-// 智能多级降级解压流程：unzip -> tar -> 纯 Node.js zlib
+// 智能解压流程：优先 unzip -> 报错或无命令时自动切为纯 Node.js zlib
 async function smartExtractZip(zipPath, destDir, targetBinaryName, finalBinPath) {
     const hasUnzip = await hasCommand('unzip');
-    const hasTar = await hasCommand('tar');
 
     if (hasUnzip) {
-        await execAsync(`unzip -o ${zipPath} -d ${destDir}`);
-        const { stdout } = await execAsync(`find ${destDir} -type f \\( -name "${targetBinaryName}" -o -name "${targetBinaryName}.exe" \\) | head -n 1`);
-        const extractedPath = stdout.trim();
-        if (!extractedPath) throw new Error("Binary not found after unzip");
-        await fs.rename(extractedPath, finalBinPath);
-
-    } else if (hasTar) {
-        await execAsync(`tar -xf ${zipPath} -C ${destDir}`);
-        const { stdout } = await execAsync(`find ${destDir} -type f \\( -name "${targetBinaryName}" -o -name "${targetBinaryName}.exe" \\) | head -n 1`);
-        const extractedPath = stdout.trim();
-        if (!extractedPath) throw new Error("Binary not found after tar");
-        await fs.rename(extractedPath, finalBinPath);
-
-    } else {
-        await extractWithZlib(zipPath, targetBinaryName, finalBinPath);
+        try {
+            await execAsync(`unzip -o ${zipPath} -d ${destDir}`);
+            const { stdout } = await execAsync(`find ${destDir} -type f \\( -name "${targetBinaryName}" -o -name "${targetBinaryName}.exe" \\) | head -n 1`);
+            const extractedPath = stdout.trim();
+            if (extractedPath) {
+                await fs.rename(extractedPath, finalBinPath);
+                await fs.chmod(finalBinPath, 0o755);
+                return;
+            }
+        } catch (e) {
+            // unzip 失败时降级走纯 Node.js
+        }
     }
 
+    // 纯 JS 解压兜底
+    await extractWithZlib(zipPath, targetBinaryName, finalBinPath);
     await fs.chmod(finalBinPath, 0o755);
 }
 
@@ -199,7 +197,7 @@ async function smartExtractZip(zipPath, destDir, targetBinaryName, finalBinPath)
             await downloadFile(CONFIG.XRAY_URL, FILES.ZIP);
 
             console.log('📦');
-            // 自动判断环境（unzip/tar/zlib）解压并提取 xray 文件
+            // 自动判断并安全解压
             await smartExtractZip(FILES.ZIP, TMP, 'xray', FILES.BIN);
 
             let certArray = [], keyArray = [];
