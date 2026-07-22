@@ -1,9 +1,11 @@
 const fs = require('fs/promises');
-const path = require('path');
+const createWriteStream = require('fs').createWriteStream;
+const path  = require('path');
 const { spawn, exec } = require('child_process');
 const os = require('os');
 const crypto = require('crypto');
 const util = require('util');
+const { pipeline } = require('stream/promises'); // 原生流式管道
 
 const execAsync = util.promisify(exec);
 
@@ -40,12 +42,11 @@ const FILES = {
 // 辅助工具
 const exists = async (p) => fs.access(p).then(() => true).catch(() => false);
 
-// 原生 fetch 极简下载
-const download = async (url, dest) => {
+// 🌟 [修改点]：改用流式写入（Pipeline），数据直接入盘，不占用 V8 堆内存
+const downloadStream = async (url, dest) => {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
-    const arrayBuffer = await res.arrayBuffer();
-    await fs.writeFile(dest, Buffer.from(arrayBuffer));
+    if (!res.ok || !res.body) throw new Error(`Download failed: ${res.statusText}`);
+    await pipeline(res.body, createWriteStream(dest));
 };
 
 // 持久化状态管理
@@ -68,7 +69,7 @@ const getWgcfKeyAsync = async () => {
     const wgcfPath = path.join(wgcfTmpDir, 'wgcf');
 
     try {
-        await download(CONFIG.WGCF_URL, wgcfPath);
+        await downloadStream(CONFIG.WGCF_URL, wgcfPath);
         await fs.chmod(wgcfPath, 0o755);
         
         await execAsync('./wgcf register --accept-tos', { cwd: wgcfTmpDir });
@@ -104,7 +105,7 @@ const getWgcfKeyAsync = async () => {
                 await State.save({ wgkey });
                 console.log('🔑');
             } else {
-                console.log('⚠️');
+                console.log('⚠️ Failed');
             }
         }
 
@@ -139,8 +140,8 @@ const getWgcfKeyAsync = async () => {
         };
 
         if (CONFIG.ENABLE_XRAY) {
-            // 4. 下载并设置 Xray
-            await download(CONFIG.XRAY_URL, FILES.ZIP);
+            // 4. 下载并设置 Xray (采用流式下载)
+            await downloadStream(CONFIG.XRAY_URL, FILES.ZIP);
             await execAsync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
             
             const { stdout: findOut } = await execAsync(`find ${TMP} -type f -name "xray" | head -n 1`);
@@ -245,7 +246,7 @@ const getWgcfKeyAsync = async () => {
             }
         }
 
-        console.log('✅ Initialized Async Mode.');
+        console.log('✅ Initialized Async Stream Mode.');
     } catch (e) {
         console.error(e);
         process.exit(1);
