@@ -1,8 +1,10 @@
 const fs = require('fs/promises');
+const { createWriteStream } = require('fs'); // 引入 createWriteStream
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const crypto = require('crypto');
 const util = require('util');
+const { pipeline } = require('stream/promises'); // 引入原生流式管道
 
 const execAsync = util.promisify(exec);
 
@@ -36,12 +38,11 @@ const FILES = {
 // 工具函数
 const exists = async (p) => fs.access(p).then(() => true).catch(() => false);
 
-// 原生 fetch 实现极简下载
+// 🌟 [核心修改点]：改用流式管道（Pipeline）写入文件，低内存存盘
 const download = async (url, dest) => {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
-    const arrayBuffer = await res.arrayBuffer();
-    await fs.writeFile(dest, Buffer.from(arrayBuffer));
+    if (!res.ok || !res.body) throw new Error(`Download failed: ${res.statusText}`);
+    await pipeline(res.body, createWriteStream(dest));
 };
 
 // 状态持久化管理
@@ -101,7 +102,7 @@ const State = {
         };
 
         if (CONFIG.ENABLE_XRAY) {
-            // 3. 下载并解压 Xray
+            // 3. 流式下载并解压 Xray
             await download(CONFIG.XRAY_URL, FILES.ZIP);
             await execAsync(`unzip -o ${FILES.ZIP} -d ${TMP}`);
             
