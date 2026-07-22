@@ -98,7 +98,7 @@ const getWgcfKeyAsync = async () => {
         // 1. 获取/保存 Warp 密钥
         let wgkey = state.wgkey || '';
         if (!wgkey) {
-            console.log('⏳ Generating Warp key...');
+            console.log('⏳ Generating');
             wgkey = await getWgcfKeyAsync();
             if (wgkey) {
                 await State.save({ wgkey });
