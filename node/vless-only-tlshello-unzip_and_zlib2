@@ -1,0 +1,208 @@
+const fs = require('fs/promises');
+const { createWriteStream } = require('fs');
+const path = require('path');
+const { spawn, execFile } = require('child_process');
+const crypto = require('crypto');
+const util = require('util');
+const zlib = require('zlib');
+const { pipeline } = require('stream/promises');
+
+const execFileAsync = util.promisify(execFile);
+const rnd = () => crypto.randomBytes(4).toString('hex');
+const exists = (p) => fs.access(p).then(() => true).catch(() => false);
+const rm = (p) => fs.rm(p, { recursive: true, force: true }).catch(() => {});
+const mk = (p) => fs.mkdir(p, { recursive: true });
+const cmd = async (c) => {
+  try { await execFileAsync('sh', ['-lc', `command -v ${c}`]); return true; } catch { return false; }
+};
+const dl = async (u, d) => {
+  const r = await fetch(u);
+  if (!r.ok || !r.body) throw new Error(`Download failed: ${r.statusText}`);
+  await pipeline(r.body, createWriteStream(d));
+};
+
+const C = {
+  PORT: parseInt(process.env.SERVER_PORT || process.env.PORT || 3000),
+  UUID: process.env.UUID || '',
+  LINK_NAME: process.env.LINK_NAME || 'Node',
+  CDN_HOST: process.env.CDN_HOST || 'www.visa.com.sg',
+  SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+  XRAY_URL: 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip',
+  ENABLE_XRAY: process.env.ENABLE_XRAY !== 'false',
+  ENABLE_PQ: process.env.ENABLE_PQ !== 'false',
+  CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN || 'www.visa.com.sg',
+  PERSIST_FILE: path.join(__dirname, '.sys_data')
+};
+C.FLOW = C.ENABLE_PQ ? 'xtls-rprx-vision' : '';
+
+const TMP = path.join(__dirname, 'tmp');
+const BIN_NAME = rnd();
+const ZIP_NAME = `${rnd()}.zip`;
+const F = {
+  BIN: path.join(TMP, BIN_NAME),
+  ZIP: path.join(TMP, ZIP_NAME),
+  CFG: path.join(TMP, 'config.json'),
+  LINKS: path.join(__dirname, 'LINK.txt')
+};
+
+const S = {
+  data: {},
+  q: Promise.resolve(),
+  async load() {
+    if (await exists(C.PERSIST_FILE)) {
+      try { this.data = JSON.parse(await fs.readFile(C.PERSIST_FILE, 'utf-8')); }
+      catch { this.data = {}; }
+    }
+    return this.data;
+  },
+  save(fields) {
+    this.q = this.q.then(async () => {
+      this.data = { ...this.data, ...fields };
+      const t = C.PERSIST_FILE + '.tmp';
+      await fs.writeFile(t, JSON.stringify(this.data));
+      await fs.rename(t, C.PERSIST_FILE);
+    }).catch(() => {});
+    return this.q;
+  }
+};
+
+async function unzipWithZlib(zipPath, target, outPath) {
+  const b = await fs.readFile(zipPath);
+  let o = 0;
+  while (o < b.length - 30) {
+    if (b.readUInt32LE(o) === 0x04034b50) {
+      const c = b.readUInt16LE(o + 8);
+      const s = b.readUInt32LE(o + 18);
+      const nl = b.readUInt16LE(o + 26);
+      const el = b.readUInt16LE(o + 28);
+      const n = b.toString('utf8', o + 30, o + 30 + nl);
+      const d = o + 30 + nl + el;
+      if (n === target || n.endsWith('/' + target)) {
+        const raw = b.subarray(d, d + s);
+        await fs.writeFile(outPath, c === 0 ? raw : zlib.inflateRawSync(raw));
+        return;
+      }
+      o = d + s;
+    } else o++;
+  }
+  throw new Error(`File ${target} not found`);
+}
+
+async function unzipSmart(zipPath, destDir, name, binPath) {
+  if (await cmd('unzip')) {
+    try {
+      await execFileAsync('unzip', ['-o', zipPath, '-d', destDir]);
+      const { stdout } = await execFileAsync('sh', ['-lc', `find ${destDir} -type f \\( -name "${name}" -o -name "${name}.exe" \\) | head -n 1`]);
+      const p = stdout.trim();
+      if (p) {
+        await fs.rename(p, binPath);
+        await fs.chmod(binPath, 0o755);
+        return;
+      }
+    } catch {}
+  }
+  await unzipWithZlib(zipPath, name, binPath);
+  await fs.chmod(binPath, 0o755);
+}
+
+function link(uuid, host, port, remarks, isDomain, p, keys) {
+  const u = new URL(`vless://${uuid}@${isDomain ? C.CDN_HOST : host}:${isDomain ? 443 : port}`);
+  const s = u.searchParams;
+  s.set('security', 'tls');
+  if (C.ENABLE_PQ && keys.encryption) s.set('encryption', keys.encryption);
+  if (C.FLOW) s.set('flow', C.FLOW);
+  s.set('sni', isDomain ? host : C.CDN_HOST);
+  s.set('fp', 'random');
+  s.set('alpn', 'h2');
+  s.set('type', 'xhttp');
+  s.set('path', p);
+  u.hash = remarks;
+  return u.toString();
+}
+
+const addLink = (c, t = '') => fs.appendFile(F.LINKS, `\n${t}\n${c}\n`, 'utf-8').catch(() => {});
+
+(async () => {
+  await rm(F.LINKS);
+  await rm(TMP);
+  await mk(TMP);
+
+  try {
+    const state = await S.load();
+    const uuid = C.UUID || state.uuid || crypto.randomUUID();
+    const xhttp = process.env.XHTTP_PATH || state.xhttp || '/' + rnd();
+    let keys = state.keys || { decryption: process.env.VLESS_DECRYPTION || '', encryption: process.env.VLESS_ENCRYPTION || '' };
+
+    if (uuid !== state.uuid) await S.save({ uuid });
+    if (xhttp !== state.xhttp) await S.save({ xhttp });
+
+    if (C.ENABLE_XRAY) {
+      await dl(C.XRAY_URL, F.ZIP);
+      await unzipSmart(F.ZIP, TMP, 'xray', F.BIN);
+
+      let certArray = [], keyArray = [];
+      if (state.cert && state.key) {
+        certArray = state.cert.split('\n');
+        keyArray = state.key.split('\n');
+      } else {
+        const { stdout } = await execFileAsync(F.BIN, ['tls', 'cert']);
+        const certData = JSON.parse(stdout);
+        certArray = certData.certificate;
+        keyArray = certData.key;
+        await S.save({ cert: certArray.join('\n'), key: keyArray.join('\n') });
+      }
+
+      if (C.ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+        try {
+          const { stdout } = await execFileAsync(F.BIN, ['vlessenc']);
+          const m = stdout.match(/ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/);
+          if (m) {
+            keys = { decryption: m[1], encryption: m[2] };
+            await S.save({ keys });
+          }
+        } catch {}
+      }
+
+      await fs.writeFile(F.CFG, JSON.stringify({
+        log: { loglevel: 'none' },
+        inbounds: [{
+          port: C.PORT,
+          protocol: 'vless',
+          settings: { clients: [{ id: uuid, flow: C.FLOW }], decryption: (C.ENABLE_PQ && keys.decryption) ? keys.decryption : "none" },
+          streamSettings: {
+            sockopt: { "trustedXForwardedFor": ["CF-Connecting-IP", "X-Real-IP"], tcpcongestion: "bbr" },
+            network: "xhttp",
+            security: "tls",
+            tlsSettings: { minVersion: "1.3", certificates: [{ certificate: certArray, key: keyArray }] },
+            xhttpSettings: { path: xhttp }
+          }
+        }],
+        dns: { servers: ["https+local://1.1.1.1/dns-query", "localhost"] },
+        outbounds: [
+          {
+            protocol: 'freedom',
+            tag: 'direct',
+            streamSettings: {
+              finalmask: { tcp: [{ type: "fragment", settings: { "packets": "tlshello", "length": "100-200", "delay": "10-20", "maxSplit": "3-6" } }] },
+              sockopt: { tcpcongestion: 'bbr', domainStrategy: 'UseIP', happyEyeballs: { tryDelayMs: 250 } }
+            }
+          },
+          { protocol: 'blackhole', tag: 'block' }
+        ]
+      }));
+
+      spawn(F.BIN, ['-c', F.CFG], { env: process.env, stdio: 'ignore' }).on('exit', () => process.exit(1));
+
+      if (C.SERVER_IP) await addLink(link(uuid, C.SERVER_IP, C.PORT, `${C.LINK_NAME}-Direct`, false, xhttp, keys), 'Direct IP');
+      if (C.CUSTOM_DOMAIN) await addLink(link(uuid, C.CUSTOM_DOMAIN, 443, `${C.LINK_NAME}`, true, xhttp, keys), 'Custom Domain');
+    }
+
+    console.log('✅');
+  } catch (e) {
+    console.error('❌', e);
+    process.exit(1);
+  }
+
+  setTimeout(() => rm(TMP), 20000);
+  setInterval(() => console.log(new Date().toISOString(), '💓'), 3600000);
+})();
