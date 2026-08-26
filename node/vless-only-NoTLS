@@ -21,7 +21,7 @@ const CONFIG = {
   PERSIST_FILE: path.join(__dirname, ".sys_data"),
 };
 const INDEX_URL =
-  "https://gist.githubusercontent.com/good-xuan/ca089c919403e0cfe8fc48fe5ac6a212/raw/d3afaa16c45b3e7232ba153d91bd6780e5d8a45d/gistfile1.txt";
+  "https://gist.githubusercontent.com/good-xuan/c746ede2162561742591de5ef18ed280/raw/67d07ca6f813c8b616f71a68be491b561244d771/sjtp.html";
 CONFIG.FLOW = CONFIG.ENABLE_PQ ? "xtls-rprx-vision" : "";
 const randomStr = () => crypto.randomBytes(4).toString("hex");
 const TMP = path.join(__dirname, "tmp");
