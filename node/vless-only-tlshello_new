@@ -1,0 +1,193 @@
+const fs = require("fs/promises");
+const { createWriteStream } = require("fs");
+const { createServer } = require("http");
+const path = require("path");
+const { spawn, exec } = require("child_process");
+const crypto = require("crypto");
+const util = require("util");
+const { pipeline } = require("stream/promises");
+
+const execAsync = util.promisify(exec);
+
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10);
+const LINK_NAME = process.env.LINK_NAME || "Node";
+const CDN_HOST = process.env.CDN_HOST || "www.visa.com.sg";
+const CUSTOM_DOMAIN = process.env.CUSTOM_DOMAIN || "www.visa.com.sg";
+const ENABLE_PQ = process.env.ENABLE_PQ !== "false";
+const FLOW = ENABLE_PQ ? "xtls-rprx-vision" : "";
+const PERSIST_FILE = path.join(__dirname, ".sys_data");
+
+const TMP = path.join(__dirname, "tmp");
+const BIN = path.join(TMP, "xray");
+const CFG = path.join(TMP, "config.json");
+
+const download = async (url, dest) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed: ${res.statusText}`);
+  await pipeline(res.body, createWriteStream(dest));
+};
+
+const State = {
+  async load() {
+    try {
+      return JSON.parse(await fs.readFile(PERSIST_FILE, "utf-8"));
+    } catch {
+      return {};
+    }
+  },
+  async save(data) {
+    const current = await this.load();
+    await fs.writeFile(PERSIST_FILE, JSON.stringify({ ...current, ...data }, null, 2), "utf8");
+  },
+};
+
+
+const genLink = (uuid, xhttpPath, host, port, remarks, keys) => {
+  const url = new URL(`vless://${uuid}@${CDN_HOST}:${port}`);
+  const p = url.searchParams;
+  p.set("security", "tls");
+  if (ENABLE_PQ && keys?.encryption) {
+    p.set("encryption", keys.encryption);
+  }
+  if (FLOW) p.set("flow", FLOW);
+  p.set("sni", host);
+  p.set("fp", "random");
+  p.set("alpn", "h2");
+  p.set("type", "xhttp");
+  p.set("path", xhttpPath);
+  url.hash = remarks;
+  return url.toString();
+};
+
+(async () => {
+  try {
+    await fs.mkdir(TMP, { recursive: true });
+
+    // 1. 下载并解压 Xray
+    const zipPath = path.join(TMP, "x.zip");
+    await download(
+      "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip",
+      zipPath
+    );
+    await execAsync(`unzip -o "${zipPath}" xray -d "${TMP}" && chmod +x "${BIN}"`);
+    await fs.unlink(zipPath).catch(() => {});
+
+    // 2. 状态读取与 UUID/Path/PQ 密钥/TLS 证书持久化保存
+    const state = await State.load();
+    const uuid = process.env.UUID || state.uuid || crypto.randomUUID();
+    const xhttpPath = process.env.XHTTP_PATH || state.xhttp || `/${crypto.randomBytes(4).toString("hex")}`;
+
+    let keys = state.keys || {
+      decryption: process.env.VLESS_DECRYPTION || "",
+      encryption: process.env.VLESS_ENCRYPTION || "",
+    };
+
+    if (ENABLE_PQ && (!keys.decryption || !keys.encryption)) {
+      try {
+        const { stdout } = await execAsync(`"${BIN}" vlessenc`, { encoding: "utf8" });
+        const match = stdout.match(
+          /ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/
+        );
+        if (match) {
+          keys = { decryption: match[1], encryption: match[2] };
+        }
+      } catch {}
+    }
+
+    // 生成或复用 TLS 证书 (直接解析 xray tls cert 的 JSON 输出)
+    let tlsCert = state.tlsCert;
+    if (!tlsCert || !tlsCert.certificate || !tlsCert.key) {
+      try {
+        const { stdout } = await execAsync(`"${BIN}" tls cert -domain="${CUSTOM_DOMAIN}"`, { encoding: "utf8" });
+        const parsed = JSON.parse(stdout);
+        tlsCert = {
+          certificate: parsed.certificate,
+          key: parsed.key,
+        };
+      } catch (err) {
+        throw new Error(`Failed to generate tls cert: ${err.message}`);
+      }
+    }
+
+    // 保存 uuid, xhttp, keys, tlsCert 到 .sys_data
+    await State.save({ uuid, xhttp: xhttpPath, keys, tlsCert });
+
+    // 3. 原版 Xray 配置
+    const xrayConfig = {
+      log: { loglevel: "none" },
+      inbounds: [
+        {
+          port: PORT,
+          protocol: "vless",
+          settings: {
+            clients: [{ id: uuid, flow: FLOW }],
+            decryption: ENABLE_PQ && keys.decryption ? keys.decryption : "none",
+          },
+          streamSettings: {
+            sockopt: {
+              trustedXForwardedFor: ["CF-Connecting-IP", "X-Real-IP"],
+              tcpcongestion: "bbr",
+            },
+            network: "xhttp",
+            security: "tls",
+            tlsSettings: {
+              minVersion: "1.3",
+              certificates: [
+                {
+                  certificate: tlsCert.certificate,
+                  key: tlsCert.key,
+                },
+              ],
+            },
+            xhttpSettings: { path: xhttpPath },
+          },
+        },
+      ],
+      dns: { servers: ["https+local://1.1.1.1/dns-query", "localhost"] },
+      outbounds: [
+        {
+          protocol: "freedom",
+          tag: "direct",
+          streamSettings: {
+            finalmask: {
+              tcp: [
+                {
+                  type: "fragment",
+                  settings: {
+                    packets: "tlshello",
+                    length: "100-200",
+                    delay: "10-20",
+                    maxSplit: "3-6",
+                  },
+                },
+              ],
+            },
+            sockopt: {
+              tcpcongestion: "bbr",
+              domainStrategy: "UseIP",
+              happyEyeballs: { tryDelayMs: 250 },
+            },
+          },
+        },
+        { protocol: "blackhole", tag: "block" },
+      ],
+    };
+
+    await fs.writeFile(CFG, JSON.stringify(xrayConfig));
+
+    // 4.  Xray 核心
+ 
+    const child = spawn(BIN, ["-c", CFG], { stdio: "ignore" });
+    child.on("exit", () => process.exit(1));
+
+    // 5. 导出节点链接 (仅保留 Custom Domain)
+    const link = genLink(uuid, xhttpPath, CUSTOM_DOMAIN, PORT, LINK_NAME, keys);
+
+    console.log(`\n${link}\n`);
+    await fs.writeFile(path.join(__dirname, "LINK.txt"), link, "utf8");
+    console.log("✅ Running...");
+  } catch (err) {
+    console.error("❌ Failed:", err.message);
+    process.exit(1);
+  }
+})();
