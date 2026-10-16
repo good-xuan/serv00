@@ -101,21 +101,9 @@ jq -n \
                 protocol: "freedom",
                 tag: "direct",
                 streamSettings: {
-                    finalmask: {
-                        tcp: [{
-                            type: "fragment",
-                            settings: {
-                                packets: "tlshello",
-                                length: "100-200",
-                                delay: "10-20",
-                                maxSplit: "3-6"
-                            }
-                        }]
-                    },
                     sockopt: {
                         tcpcongestion: "bbr",
-                        domainStrategy: "UseIP",
-                        happyEyeballs: { tryDelayMs: 250 }
+                        domainStrategy: "UseIPv4v6"
                     }
                 }
             },
