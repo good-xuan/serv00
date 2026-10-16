@@ -147,7 +147,7 @@ const genLink = (uuid, xhttpPath, host, port, remarks, keys) => {
           streamSettings: {
             sockopt: {
               tcpcongestion: "bbr",
-              domainStrategy: "UseIP"
+              domainStrategy: "UseIPv4v6"
             },
           },
         },
