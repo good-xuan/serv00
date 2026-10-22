@@ -139,7 +139,7 @@ const genLink = (uuid, xhttpPath, host, port, remarks, keys) => {
           },
         },
       ],
-      dns: { servers: ["https+local://1.1.1.1/dns-query", "localhost"] },
+      dns: { servers: ["https+local://1.1.1.1/dns-query"] },
       outbounds: [
         {
           protocol: "freedom",
