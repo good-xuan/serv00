@@ -169,7 +169,7 @@ const genLink = (uuid, xhttpPath, host, port, remarks, keys) => {
     // 5. 导出节点链接 (仅保留 Custom Domain)
     const link = genLink(uuid, xhttpPath, CUSTOM_DOMAIN, PORT, LINK_NAME, keys);
 
-    console.log(`\n${link}\n`);
+    //console.log(`\n${link}\n`);
     await fs.writeFile(path.join(__dirname, "LINK.txt"), link, "utf8");
     console.log("✅ Running...");
   } catch (err) {
