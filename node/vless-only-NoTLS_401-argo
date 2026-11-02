@@ -135,7 +135,7 @@ const genLink = (uuid, xhttpPath, host, port, remarks, keys) => {
   }
   if (FLOW) p.set("flow", FLOW);
   p.set("sni", host);
-  p.set("host", host);
+  //p.set("host", host);
   p.set("fp", "random");
   p.set("alpn", "h2");
   p.set("type", "xhttp");
