@@ -22,12 +22,11 @@ console.log("===============================================================\n")
 
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10);
 const LINK_NAME = process.env.LINK_NAME || "AnyTLS-Node";
-const CDN_HOST = process.env.CDN_HOST || "dnew.cc";
 const CUSTOM_DOMAIN = process.env.CUSTOM_DOMAIN || "dnew.cc";
 const PERSIST_FILE = path.join(__dirname, ".sys_data");
 
 const SERVER_IP = process.env.SERVER_IP || "127.0.0.1";
-const SERVER_PORT = process.env.SERVER_port || "443";
+const SERVER_PORT = process.env.SERVER_PORT || "443";
 
 const TMP = path.join(__dirname, "tmp");
 const BIN = path.join(TMP, "anytls-server");
