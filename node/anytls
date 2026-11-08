@@ -59,7 +59,7 @@ const genLink = (password, serverHost, port, sni, remarks) => {
   const url = new URL(`anytls://${encodeURIComponent(password)}@${serverHost}:${port}`);
   const p = url.searchParams;
   if (sni) p.set("sni", sni);
-  p.set("insecure", "0");
+  p.set("insecure", "1");
   url.hash = remarks;
   return url.toString();
 };
