@@ -44,10 +44,10 @@ const State = {
 // 伪装服务：永久 401 强制浏览器弹出认证窗口
 const startStaticServer = () => {
   createServer((req, res) => {
-    res.writeHead(401, {
-      "WWW-Authenticate": 'Basic realm="Restricted Access"',
-      "Content-Type": "text/plain; charset=utf-8",
-    });
+    //res.writeHead(401, {
+      //"WWW-Authenticate": 'Basic realm="Restricted Access"',
+      //"Content-Type": "text/plain; charset=utf-8",
+    //});
     res.end("Access Denied");
   }).listen(PORT + 2, "127.0.0.1");
 };
