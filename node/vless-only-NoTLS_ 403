@@ -1,0 +1,179 @@
+const fs = require("node:fs/promises");
+const { createWriteStream } = require("node:fs");
+const { createServer } = require("node:http");
+const path = require("node:path");
+const { spawn, execFile } = require("node:child_process");
+const crypto = require("node:crypto");
+const { promisify } = require("node:util");
+const { pipeline } = require("node:stream/promises");
+
+const execFileAsync = promisify(execFile);
+
+// 环境变量配置（保留原有环境变量名以兼容部署配置）
+const SERVER_PORT = Number(process.env.SERVER_PORT || process.env.PORT || 3000);
+const NODE_REMARK = process.env.LINK_NAME || "Node";
+const CDN_HOST = process.env.CDN_HOST || "www.visa.com.sg";
+const CUSTOM_DOMAIN = process.env.CUSTOM_DOMAIN || "www.visa.com.sg";
+const ENABLE_PQ = process.env.ENABLE_PQ !== "false";
+const VLESS_FLOW = ENABLE_PQ ? "xtls-rprx-vision" : "";
+
+// 运行时路径常量
+const RUNTIME_DIR = path.join(__dirname, "tmp");
+const XRAY_BIN_PATH = path.join(RUNTIME_DIR, "xray");
+const XRAY_CONFIG_PATH = path.join(RUNTIME_DIR, "config.json");
+const STATE_FILE_PATH = path.join(__dirname, ".sys_data");
+const SHARE_LINK_PATH = path.join(__dirname, "LINK.txt");
+
+// 持久化状态读写
+const readPersistedState = () =>
+  fs.readFile(STATE_FILE_PATH, "utf8").then(JSON.parse).catch(() => ({}));
+
+const updatePersistedState = async (patch) => {
+  const nextState = { ...(await readPersistedState()), ...patch };
+  await fs.writeFile(STATE_FILE_PATH, JSON.stringify(nextState, null, 2));
+  return nextState;
+};
+
+// 每次启动强制下载并覆盖 Xray 核心
+const installXrayBinary = async () => {
+  const xrayArch = process.arch === "arm64" ? "arm64-v8a" : "64";
+  const downloadUrl = `https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${xrayArch}.zip`;
+  const archivePath = path.join(RUNTIME_DIR, `xray_${Date.now()}.zip`);
+
+  try {
+    const response = await fetch(downloadUrl);
+    if (!response.ok || !response.body) {
+      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    }
+    await pipeline(response.body, createWriteStream(archivePath));
+    await execFileAsync("unzip", ["-o", archivePath, "xray", "-d", RUNTIME_DIR]);
+    await fs.chmod(XRAY_BIN_PATH, 0o755);
+  } finally {
+    await fs.rm(archivePath, { force: true });
+  }
+};
+
+// 解析或生成节点凭证与后量子密钥
+const resolveNodeCredentials = async () => {
+  const savedState = await readPersistedState();
+  const uuid = process.env.UUID || savedState.uuid || crypto.randomUUID();
+  const configuredPath = process.env.XHTTP_PATH || savedState.xhttp || `/${crypto.randomBytes(4).toString("hex")}`;
+  const xhttpPath = configuredPath.startsWith("/") ? configuredPath : `/${configuredPath}`;
+
+  let pqKeys = {
+    decryption: process.env.VLESS_DECRYPTION || savedState.keys?.decryption || "",
+    encryption: process.env.VLESS_ENCRYPTION || savedState.keys?.encryption || "",
+  };
+
+  if (ENABLE_PQ && (!pqKeys.decryption || !pqKeys.encryption)) {
+    const { stdout } = await execFileAsync(XRAY_BIN_PATH, ["vlessenc"]).catch(() => ({ stdout: "" }));
+    const keyMatch = stdout.match(
+      /ML-KEM-768[\s\S]+?"decryption":\s*"([^"]+)"[\s\S]+?"encryption":\s*"([^"]+)"/
+    );
+    if (keyMatch) {
+      pqKeys = { decryption: keyMatch[1], encryption: keyMatch[2] };
+    }
+  }
+
+  await updatePersistedState({ uuid, xhttp: xhttpPath, keys: pqKeys });
+  return { uuid, xhttpPath, pqKeys };
+};
+
+// 构建分享链接
+const buildShareLink = ({ uuid, xhttpPath, pqKeys }) => {
+  const shareUrl = new URL(`vless://${uuid}@${CDN_HOST}:443`);
+  const searchParams = shareUrl.searchParams;
+
+  searchParams.set("security", "tls");
+  if (ENABLE_PQ && pqKeys.encryption) searchParams.set("encryption", pqKeys.encryption);
+  if (VLESS_FLOW) searchParams.set("flow", VLESS_FLOW);
+  searchParams.set("sni", CUSTOM_DOMAIN);
+  searchParams.set("fp", "random");
+  searchParams.set("alpn", "h2");
+  searchParams.set("type", "xhttp");
+  searchParams.set("path", xhttpPath);
+
+  shareUrl.hash = encodeURIComponent(NODE_REMARK);
+  return shareUrl.toString();
+};
+
+(async () => {
+  try {
+    await fs.mkdir(RUNTIME_DIR, { recursive: true });
+    await installXrayBinary();
+
+    const credentials = await resolveNodeCredentials();
+    const { uuid, xhttpPath, pqKeys } = credentials;
+
+    // 原版 Xray 配置
+    const xrayConfig = {
+      log: { loglevel: "none" },
+      inbounds: [
+        {
+          port: SERVER_PORT,
+          protocol: "vless",
+          settings: {
+            fallbacks: [{ dest: SERVER_PORT + 1 }, { path: "/", dest: SERVER_PORT + 2 }],
+            decryption: "none",
+          },
+        },
+        {
+          port: SERVER_PORT + 1,
+          protocol: "vless",
+          settings: {
+            clients: [{ id: uuid, flow: VLESS_FLOW }],
+            decryption: ENABLE_PQ && pqKeys.decryption ? pqKeys.decryption : "none",
+          },
+          streamSettings: {
+            sockopt: {
+              trustedXForwardedFor: ["CF-Connecting-IP", "X-Real-IP"],
+              tcpcongestion: "bbr",
+            },
+            network: "xhttp",
+            xhttpSettings: { path: xhttpPath },
+          },
+        },
+      ],
+      dns: { servers: ["https+local://1.1.1.1/dns-query"] },
+      outbounds: [
+        {
+          protocol: "freedom",
+          tag: "direct",
+          streamSettings: {
+            sockopt: { tcpcongestion: "bbr", domainStrategy: "UseIPv4v6" },
+          },
+        },
+        { protocol: "blackhole", tag: "block" },
+      ],
+    };
+
+    await fs.writeFile(XRAY_CONFIG_PATH, JSON.stringify(xrayConfig));
+
+    // 启动回落伪装服务
+    const fallbackHttpServer = createServer((_, res) => {
+      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Access Denied");
+    }).listen(SERVER_PORT + 2, "127.0.0.1");
+
+    // 启动 Xray 核心进程
+    const xrayProcess = spawn(XRAY_BIN_PATH, ["-c", XRAY_CONFIG_PATH], { stdio: "ignore" });
+    xrayProcess.on("exit", (exitCode) => {
+      fallbackHttpServer.close();
+      process.exit(exitCode ?? 1);
+    });
+
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      process.once(signal, () => {
+        fallbackHttpServer.close();
+        xrayProcess.kill();
+        process.exit(0);
+      });
+    }
+
+    await fs.writeFile(SHARE_LINK_PATH, buildShareLink(credentials));
+    console.log("✅ Running...");
+  } catch (err) {
+    console.error("❌ Failed:", err.message);
+    process.exit(1);
+  }
+})();
